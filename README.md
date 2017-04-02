@@ -1,7 +1,7 @@
-# aws-iot-esp8266-thing
+# aws-iot-GET-POST-loop
 Micropython code which uses the AWS-IOT REST API to GET/POST device state info.
 
-Although the code does not use ESP specific functions, it was only tested on an ESP8266.
+This was only tested on an ESP8266.
 
 There are 3 primary modules:
   * aws_thing_loop: instances a thing, GETs the AWS shadow state for the thing, and POSTs the reported state to AWS
