@@ -46,8 +46,7 @@ class Shade_controller:
         self.LOWER = 0
         self.RAISE = 1
 
-        self.BATTERY_SAMPLE_INTERVAL = 15
-        self.BATTERY_LOG_PREFIX = "battery_log_"
+        self.BATTERY_SAMPLE_INTERVAL = 450 #15 minutes
         
         """ the following dictionary are functions that are called when a desired state variable changes:
             the dictionary would be modified to expose more variables/functions for different devices
@@ -64,7 +63,7 @@ class Shade_controller:
             
             pstate starts with defaults, which will get over-written by the values read from persistent store (flash)
             """
-        self.pstate = {'sleep':200, 'awake':4, 'test':'none', 'test_param':0, 'position':'unknown'}
+        self.pstate = {'sleep':180, 'awake':4, 'test':'unknown', 'test_param':0, 'position':'unknown'}
         self.restored_state = None
         #NON-PERSISTED_STATE = ('duration', 'reverse', 'threshold')
         
@@ -75,6 +74,9 @@ class Shade_controller:
         self.i2c = None
         self.i2c_devices = None
         self.current_sensor = None
+        #the following are used by _activate_motor to detect current threshold crossing
+        self.averaging_sum = 0
+        self.average_current_threshold = 0
     
         self._restore_state()
     
@@ -99,15 +101,19 @@ class Shade_controller:
         self.pstate['sleep'] = self.shadow_state['state']['desired']['sleep']
         self.pstate['awake'] = self.shadow_state['state']['desired']['awake']
         # test and position variables are updated in the function that processes them.
-            
-        for key in self.DISPATCH:
-            #thing.dispatch is a dictionary of functions whose name can match an IOT state variable
-            if key in self.shadow_state['state']['delta']:
-                if not (key == 'position' and self.pstate['position'] == 'unknown'):
-                    status = self.DISPATCH[key]()
-                    # dispatch only one delta per GET/POST cycle so the status is updated serially
-                    break
+
+        if self.pstate['test'] == 'unknown':
+            # initial condition - this avoid re-doing the test if the pstate was not restored
+            self.pstate['test'] = self.shadow_state['state']['desired']['test']
+            self.pstate['test_param'] = self.shadow_state['state']['desired']['test_param']
         
+        for key in self.DISPATCH:
+            if self.shadow_state['state']['desired'][key] != self.pstate[key] and self.pstate[key] != 'unknown':
+                # the compare with unknown prevents a position command from being dispatched
+                status = self.DISPATCH[key]()
+                # dispatch only one delta per GET/POST cycle so the status is updated serially
+                break
+
         # persist the changes of state due to the dispatch, if any
         if self._persist_state() is not None:
             print("Error: persisting pstate failed.")
@@ -130,7 +136,6 @@ class Shade_controller:
                         (key not in self.shadow_state['state']['reported']) or \
                         (self.shadow_state['state']['reported'][key] != value):
                     self.reported_state[key] = value
-
 
 
     def blink_led(self, t=50):
@@ -185,82 +190,32 @@ class Shade_controller:
         machine.deepsleep()
 
 
-    def check_conditions(self, date, time):
+    def check_conditions(self, timestamp):
         """Creates battery voltage, current and charge rate dictionary to send to AWS-IOT.
-            Uses a file to persist last voltage measurement.
-            File name convention is: battery_log_YYYYMMDD.txt
-            log string convention is: HHMMSS: mVolts
+            compares the shadow metadata timestamp with the NTP time to determine if an update should occur
+            Note: shadow timestamp is from 1970-01-01 whereas micropython is 2000-01-01
+                  So one has to subtract 946684800 from the comparison
 
-            Input: date (YYYYMMDD) & time (HHMMSS)
+            Input: timestano
             Return: None
             Output: an updated reported_state at the class level and battery_log files
             """
-
-        write_log = False
-        previous_mvolts = None
-        delta_hours = 0
-        delta_minutes = 0
-        fname = self.BATTERY_LOG_PREFIX + date + ".txt"
-        s = None
         
-        try:
-            with open(fname) as f:
-                s = f.read()
-        except OSError:
-            write_log = True
-        
-        if s is not None and len(s) > 0:
-            # test if the last sample time was greater than N minutes ago
-            lines = s.split()
-            if len(lines) > 0 and len(lines[-1]) > 10:
-                last_log_hour = int(lines[-1][0:2])
-                now_hour = int(time[0:2])
-                delta_hours = now_hour - last_log_hour
-#                print("  hours: last: {0}  now:  {1}  delta {2}".format(last_log_hour, now_hour, delta_hours))
-                # there is no hours roll-over detect, because each day starts a new log
-                
-                last_log_minutes = int(lines[-1][2:4])
-                now_minutes = int(time[2:4])
-                delta_minutes = now_minutes - last_log_minutes
-#                print("minutes: last: {0}  now:  {1}  delta {2}".format(last_log_minutes, now_minutes, delta_minutes))
-                if delta_minutes < 0:
-                    delta_minutes += 60
-                    delta_hours -= 1
-                delta_minutes += delta_hours * 60
-#                print("final delta minutes: {0}".format(delta_minutes))
+        do_update = False
+        if 'metadata' in self.shadow_state and 'reported' in self.shadow_state['metadata'] and 'batteryVoltage' in self.shadow_state['metadata']['reported']:
+            bv_ts = self.shadow_state['metadata']['reported']['batteryVoltage']['timestamp']
+            delta_ts = timestamp + 946684800 - bv_ts
+#            print("metadata_ts: {0}  -- ntp_ts: {1} -- delta: {2}".format(bv_ts, timestamp, delta_ts))
+            if delta_ts > self.BATTERY_SAMPLE_INTERVAL:
+                do_update = True
+        else:
+            do_update = True
 
-                if delta_minutes > self.BATTERY_SAMPLE_INTERVAL:
-                    write_log = True
-                    previous_mvolts = int(lines[-1].split(":")[1])
-            else: print("Unexpected format in battery_log: {0}".format(lines[-1]))
-        else: write_log = True
-
-        if write_log and self.current_sensor is not None:
+        if do_update and self.current_sensor is not None:
             self.current_sensor.start()
             self.reported_state['batteryVoltage'] = self.current_sensor.get_bus_mv()
             self.reported_state['batteryCurrent'] = self.current_sensor.get_current_ma()
             self.current_sensor.stop()
-            if previous_mvolts is not None:
-                self.reported_state['batteryChargingRate'] =  self.reported_state['batteryVoltage'] - previous_mvolts
-            
-            with open(fname, "a") as f:
-                f.write(time + ":" + str(self.reported_state['batteryVoltage']) + "\n")
-            self._cull_battery_logs()
-
-
-    def _cull_battery_logs(self):
-        #remove old log files, but keep the last 5
-        import uos
-        file_list = uos.listdir()
-        log_file_list = []
-        for filename in file_list:
-            if self.BATTERY_LOG_PREFIX in filename:
-                log_file_list.append(filename)
-        log_file_list.sort()
-        if len(log_file_list) > 8:
-            while len(log_file_list) > 5:
-                uos.remove(log_file_list[0])
-                del log_file_list[0]
 
 
     def _persist_state(self):
@@ -273,11 +228,7 @@ class Shade_controller:
                     break
         else:
             state_change = True
-#        print("restored_state: ", end="")
-#        print(self.restored_state)
         if state_change:
-#            print("Persisting pstate: ", end="")
-#            print(self.pstate)
             import ujson
             # there is no ujson.dump, only ujson.dumps in micropython
             try:
@@ -351,11 +302,10 @@ class Shade_controller:
                 self.pstate['position'] = 'unknown'
 
             status = "Done: new position: {0}; motor on for: {1} msec".format(self.pstate['position'], measured_duration)
-    #        !! add threshold crossing text to status
-    #        if (currentThresholdCrossed()) sprintf(status_string, "%s; %s", status_string, THRESHOLD_CROSSED);
+            if self.averaging_sum > self.average_current_threshold:
+                status = status + "; Current: {0} over Threshold: {1}".format(self.averaging_sum, self.average_current_threshold)
         else:
             status = "Error on position; I2C error: {0}".format(measured_duration)
-        
         return status
 
 
@@ -371,7 +321,7 @@ class Shade_controller:
         if self.pstate['test'] in DISPATCH:
             status = DISPATCH[self.pstate['test']]()
         else:
-            status = "Unrecognized test: " + testname
+            status = "Unrecognized test: " + self.pstate['test']
         return status
 
     def _test_none(self):
@@ -438,16 +388,8 @@ class Shade_controller:
         from motor import Motor
         import machine, utime
         
-        # clear current history data
-        self.starting_current_next = 0
-        self.starting_currents=[0 for _ in range(len(self.starting_currents))]
-        self.stopping_current_next = 0
-        self.stopping_currents=[0 for _ in range(len(self.stopping_currents))]
-
         elapsed_time = 0;
-        #threshold_crossed_count = 0;
-        #current_threshold_crossed = False
-        average_current_threshold = self.shadow_state['state']['desired']['threshold'] * self.MOTOR_AVERAGING_SAMPLES
+        self.average_current_threshold = self.shadow_state['state']['desired']['threshold'] * self.MOTOR_AVERAGING_SAMPLES
         
         #invert direction if reverse bit is set
         motor_direction = direction ^ (self.shadow_state['state']['desired']['reverse'] & 1)
@@ -479,15 +421,16 @@ class Shade_controller:
                 self.motor1.adjust_speed(self.MOTOR_SPEED_RAMP)
             
             # check the avg of the last N samples don't exceed the threshold
-            averaging_sum = 0
+            self.averaging_sum = 0
             for averaging_offset in range(-self.MOTOR_AVERAGING_SAMPLES, 0):
                 averaging_index = self.stopping_current_next + averaging_offset
                 if (averaging_index < 0):
                     averaging_index += self.STOPPING_CURRENT_SAMPLE_COUNT
-                averaging_sum += self.stopping_currents[averaging_index]
+                self.averaging_sum += self.stopping_currents[averaging_index]
+#                print("Index: {0} -- Value: {1} -- Sum: {2}".format(averaging_index, self.stopping_currents[averaging_index], self.averaging_sum))
             
             # stop the motor if over the threshold
-            if averaging_sum > average_current_threshold:
+            if self.averaging_sum > self.average_current_threshold:
                 break;
             
             delay_time = self.MOTOR_SENSOR_SAMPLE_INTERVAL - (utime.ticks_ms() - sample_ticks_begin)

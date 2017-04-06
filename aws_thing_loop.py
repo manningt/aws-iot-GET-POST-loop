@@ -56,6 +56,7 @@ def main():
 
     thing.blink_led() #2nd blink: after WiFi connection
 
+    t_secs = 0 # number of seconds from the year 2000
     for attempt in range(5):
         t_secs = get_ntp_time()
         if (t_secs != 0):
@@ -92,7 +93,7 @@ def main():
         thing.goto_sleep(cause="{0} -- Error on GET: response code: {1}".format(date_time, r.status_code))
 
     # check conditions: the thing can check battery metrics, environmental conditions, etc.
-    thing.check_conditions(datestamp, time_now_utc)
+    thing.check_conditions(t_secs)
 
     if len(thing.reported_state) > 0:
         post_body = {'state' : {'reported': {} } }
@@ -119,12 +120,18 @@ def main():
 #            print(r.json())
             thing.goto_sleep(cause="{0} -- Error on POST: response code: {1}".format(date_time, r.status_code))
 
+        print("StartingCurrents: ", end="")
+        print(thing.starting_currents)
+        print("StoppingCurrents: ", end="")
+        print(thing.stopping_currents)
+
     elapsed_msecs = utime.ticks_diff(utime.ticks_ms(), start_ticks)
     print("Main took: {0} msec. ---  Free mem before exit: {1}".format(elapsed_msecs, gc.mem_free()))
     thing.goto_sleep()
 
 
 def get_aws_info():
+    #TODO: get the keys from a secure store instead of the flash filesystem
     AWS_INFO_FILENAME = "./aws_info.txt"
     import ujson
     try:
