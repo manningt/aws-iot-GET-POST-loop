@@ -19,6 +19,10 @@ class Motor(object):
         self.pin1 = machine.PWM(machine.Pin(self.enable1), freq=_pwm_freq, duty=0)
         self.pin2 = machine.PWM(machine.Pin(self.enable2), freq=_pwm_freq, duty=0)
         #example: pin12 = machine.PWM(machine.Pin(12), freq=1000, duty=256)
+        
+    def __del__(self):
+        # it doesn't appear __del__ gets called when deleting the class, so allowing deinit to be called directly
+        self.deinit()
 
     def start(self, direction=True, speed=40):
         """Start the motor at the specified speed and rotation direction."""
@@ -36,14 +40,19 @@ class Motor(object):
     def stop(self):
         # to stop, both pins should be low
         self.speed_setting = 0
-        self.pin1.duty(self.speed_setting) #.deinit() left the pin floating
+        self.pin1.duty(self.speed_setting)
         self.pin2.duty(self.speed_setting)
-        # if necessary, set the pins to low:
-        #import machine
-        #self.pin1 = machine.Pin(self.enable1, machine.Pin.OUT, value=0)
-        #self.pin2 = machine.Pin(self.enable2, machine.Pin.OUT, value=0)
 
     def adjust_speed(self, delta):
         #new_speed = (self.speed_setting * 205) >> 11 # equivalent to divide by 10
         new_speed = self.speed_setting + delta
         self.start(self.forward, new_speed)
+
+    def deinit(self):
+        # print("de-init the motor Enable pins.")
+        import machine
+        self.pin1.deinit()
+        self.pin2.deinit()
+        #leave the pins floating
+        self.pin1.init(machine.Pin.IN)
+        self.pin2.init(machine.Pin.IN)

@@ -23,15 +23,21 @@ class Shade_controller:
     stopping_current_next = 0
     
     def __init__(self):
+        import machine
+
         self.PSTATE_FILENAME = "./pstate.txt"
-        # the following are the GPIO numbers; the labels refer to the nodeMCU development board
+        # the following are the GPIO numbers
         self.PIN_LED = 2
-        self.PIN_MOTOR_ENABLE1 = 12     #label D6 on the nodeMCU board
-        self.PIN_MOTOR_ENABLE2 = 14     #D5
-        self.PIN_POWER_ENABLE = 13      #D7
-        self.PIN_CHARGING_DISABLE = 2   #D4
+        self.PIN_POWER_ENABLE = 14      # D5 on the nodeMCU board
+        # self.PIN_MOTOR_ENABLE1 = 12     #D6
+        # self.PIN_MOTOR_ENABLE2 = 13     #D7
+        self.PIN_MOTOR_ENABLE1 = 15     #D8
+        self.PIN_MOTOR_ENABLE2 = 2      #D4
+        # self.PIN_MOTOR_EN1 = [12, 15]
+        # self.PIN_MOTOR_EN2 = [13, 2]
+        self.PIN_CHARGING_DISABLE = 0   #D3
+
         self.PIN_WAKEUP = 16            #D0
-        
         self.PIN_SCL = 5                #D1
         self.PIN_SDA = 4                #D2
         self.I2C_FREQ = 100000
@@ -62,15 +68,16 @@ class Shade_controller:
             However, the persisted position is the REAL position, which may not be the desired position
             
             pstate starts with defaults, which will get over-written by the values read from persistent store (flash)
+            
+            the default of 0 for sleep allows recovery if the network is not reachable.
             """
-        self.pstate = {'sleep':180, 'awake':4, 'test':'unknown', 'test_param':0, 'position':'unknown'}
+        self.pstate = {'sleep':0, 'awake':4, 'test':'unknown', 'test_param':0, 'position':'unknown'}
         self.restored_state = None
         #NON-PERSISTED_STATE = ('duration', 'reverse', 'threshold')
-        
+
         self.ppin_led = None
-        self.ppin_power_enable = None
-        self.ppin_charging_disable = None
-        self.motor1 = None
+        self.ppin_power_enable = machine.Pin(self.PIN_POWER_ENABLE, machine.Pin.OUT, value=0)
+        self.ppin_charging_disable = machine.Pin(self.PIN_CHARGING_DISABLE, machine.Pin.OUT, value=1)
         self.i2c = None
         self.i2c_devices = None
         self.current_sensor = None
@@ -80,11 +87,19 @@ class Shade_controller:
     
         self._restore_state()
     
-        import machine
         id_reversed = machine.unique_id()
         id_binary = [id_reversed[n] for n in range(len(id_reversed) - 1, -1, -1)]
         self.id = 'ESP-' + ''.join('{:02x}'.format(x) for x in id_binary)
-
+        # command history is stored in the RTC
+        self.rtc = machine.RTC()
+        self.history = self.rtc.memory().decode("utf8").split("\n")
+        self.previous_action = None
+        if len(self.history[0]) > 0:
+            print("Last action: " + self.history[0])
+            self.previous_action = self.history[0].split("|")
+            #previous action = strt/done|key|value|metadata_timestamp|status
+            if len(self.previous_action) < 4:
+                self.previous_action = None
 
     def process_shadow_state(self):
         """ Input: is an updated shadow_state at the class level; shadow_state was not passed in as an arg to avoid the memory allocation
@@ -92,10 +107,16 @@ class Shade_controller:
             Output: an updated reported_state at the class level, which does not have to be used immediately
         """
         status = self._instance_current_sensor()
-        if (self.current_sensor is not None) and not self.current_sensor.in_standby_when_initialized:
-            print("Current sensor not in standby on restart")
-            #! TODO: turn off 12V
+        current_action = None
+        if self.current_sensor is not None and not self.current_sensor.in_standby_when_initialized:
+            print("Current sensor not in standby.")
             self.current_sensor.stop()
+        if self.previous_action is not None and self.previous_action[0] != "done":
+            #The means the operating (test or reposition) was interrupted before it finished
+            # so do the following to clean-up and to avoid re-running the same command
+            self.pstate['test'] = "unknown"
+            self.pstate['position'] = "unknown"
+            status = "Error: state change: {}: {} failed before completion".format(self.previous_action[1], self.previous_action[2])
 
         # the following state variables do not have an 'action'; just update them so they'll be persisted after the 'action' is done
         self.pstate['sleep'] = self.shadow_state['state']['desired']['sleep']
@@ -106,10 +127,17 @@ class Shade_controller:
             # initial condition - this avoid re-doing the test if the pstate was not restored
             self.pstate['test'] = self.shadow_state['state']['desired']['test']
             self.pstate['test_param'] = self.shadow_state['state']['desired']['test_param']
-        
+
         for key in self.DISPATCH:
-            if self.shadow_state['state']['desired'][key] != self.pstate[key] and self.pstate[key] != 'unknown':
-                # the compare with unknown prevents a position command from being dispatched
+            # the compare with unknown prevents a position command from being dispatched
+            shadow_state_changed = self.shadow_state['state']['desired'][key] != self.pstate[key] and self.pstate[key] != "unknown"
+            if self.previous_action is None:
+                timestamp_changed = True
+            else:
+                timestamp_changed = self.shadow_state['metadata']['desired'][key] != self.previous_action[3]
+            if shadow_state_changed and timestamp_changed:
+                current_action = "strt|{}|{}|{}|TBD\n".format(key,self.shadow_state['state']['desired'][key], self.shadow_state['metadata']['desired'][key]['timestamp'])
+                self.rtc.memory(current_action + self.history[0])
                 status = self.DISPATCH[key]()
                 # dispatch only one delta per GET/POST cycle so the status is updated serially
                 break
@@ -117,9 +145,6 @@ class Shade_controller:
         # persist the changes of state due to the dispatch, if any
         if self._persist_state() is not None:
             print("Error: persisting pstate failed.")
-        
-        if status is not None:
-            self.reported_state['status'] = status
         
         for key, value in self.shadow_state['state']['desired'].items():
             # only report changed variables in order to minimize shadow versions
@@ -137,44 +162,70 @@ class Shade_controller:
                         (self.shadow_state['state']['reported'][key] != value):
                     self.reported_state[key] = value
 
+        if status is not None:
+            self.reported_state['status'] = status
+            if current_action is not None:
+                current_action = current_action.replace("strt","done")
+                current_action = current_action.replace("TBD",status)
+                self.rtc.memory(current_action + self.history[0])
+
+        if self.starting_currents[0] != 0:
+            currents = ""
+            for i in self.starting_currents:
+                currents = currents + "{} ".format(i)
+            self.reported_state['starting_currents'] = currents
+            #stopping currents start at next - 1 and loop around
+            currents = ""
+            idx = self.stopping_current_next - 1
+            if idx < 0:
+                idx = self.STOPPING_CURRENT_SAMPLE_COUNT - 1
+            for _ in self.stopping_currents:
+                currents = currents + "{} ".format(self.stopping_currents[idx])
+                idx += 1
+                if (idx > self.STOPPING_CURRENT_SAMPLE_COUNT - 1):
+                    idx = 0
+            self.reported_state['stopping_currents'] = currents
 
     def blink_led(self, t=50):
         import machine, utime
         if self.ppin_led is None:
             self.ppin_led = machine.Pin(self.PIN_LED, machine.Pin.OUT, value=0)
         else:
-            self.ppin_led.init(mode=machine.Pin.OUT)
+            self.ppin_led.init(machine.Pin.OUT)
         utime.sleep_ms(t)
         # leave the pin as an input to not mess up any pin state in reset requirements
-        self.ppin_led.init(mode=machine.Pin.IN)
+        self.ppin_led.init(machine.Pin.IN)
         return
-
 
     def goto_sleep(self,cause=None):
         import webrepl, machine, sys, utime
         LOG_FILENAME = "./log.txt"
         
         if cause is not None:
+            print(cause)
             with open(LOG_FILENAME, 'a') as log_file:
                 log_file.write(cause + "\n")
+
+        start_ticks = utime.ticks_ms()
+        elapsed_msecs = 0
 
         if 'sleep' in self.pstate:
             if self.pstate['sleep'] < 1:
                 # exit: stop the infinite loop of main & deep-sleep
-                print("Exit due to sleep parameter < 1.")
-                with open(LOG_FILENAME, 'a') as log_file:
-                    log_file.write("Exit due to sleep parameter < 1.\n")
+                print("Staying awake due to sleep parameter < 1.")
+                webrepl.start()
+                # configure timer to reset after 3 minutes, then it will fetch a new shadow statw
+                tim = machine.Timer(-1)
+                tim.init(period=120000, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
                 sys.exit(0)
         else:
             with open(LOG_FILENAME, 'a') as log_file:
                 log_file.write("Exit due missing sleep parameter.\n")
             sys.exit(-1)
         
-        start_ticks = utime.ticks_ms()
-        elapsed_msecs = 0
         # multiply awake time by 1024 to convert from seconds to milliseconds
         while elapsed_msecs < (self.pstate['awake'] << 10):
-            for _ in range(3):
+            for _ in range(4):
                 self.blink_led()
                 utime.sleep_ms(100)
             utime.sleep_ms(1900)
@@ -189,7 +240,6 @@ class Shade_controller:
         rtc.alarm(rtc.ALARM0, self.pstate['sleep'] << 10)
         machine.deepsleep()
 
-
     def check_conditions(self, timestamp):
         """Creates battery voltage, current and charge rate dictionary to send to AWS-IOT.
             compares the shadow metadata timestamp with the NTP time to determine if an update should occur
@@ -200,7 +250,6 @@ class Shade_controller:
             Return: None
             Output: an updated reported_state at the class level and battery_log files
             """
-        
         do_update = False
         if 'metadata' in self.shadow_state and 'reported' in self.shadow_state['metadata'] and 'batteryVoltage' in self.shadow_state['metadata']['reported']:
             bv_ts = self.shadow_state['metadata']['reported']['batteryVoltage']['timestamp']
@@ -216,7 +265,6 @@ class Shade_controller:
             self.reported_state['batteryVoltage'] = self.current_sensor.get_bus_mv()
             self.reported_state['batteryCurrent'] = self.current_sensor.get_current_ma()
             self.current_sensor.stop()
-
 
     def _persist_state(self):
         # only perform flash write if the restored state not equal to current pstate
@@ -238,7 +286,6 @@ class Shade_controller:
                 return "Error: persisting state failed."
         return None
 
-
     def _restore_state(self):
         import ujson
         # if no pstate file then defaults will be used
@@ -251,20 +298,22 @@ class Shade_controller:
         except OSError:
             print('Warning (restore_state): no pstate file')
 
-
     def _position(self):
         """ validates shadow state variables: position, duration, reverse -- and then calls _activate_motor
             Inputs: shadow_state
             Returns: status string
         """
-        
         if self.current_sensor is None:
             return "Fail (position): no current sensor"
 
-        LEGAL_POSITIONS = ('open', 'close', 'half')
         MAX_DURATION = 59
+        POSITIONS = ['open', 'closed', 'half']
+        class Positions:
+            OPEN = 0
+            CLOSED = 1
+            HALF = 2
 
-        if self.shadow_state['state']['desired']['position'] not in LEGAL_POSITIONS:
+        if self.shadow_state['state']['desired']['position'] not in POSITIONS:
             return "Error: unrecognized position: {0}".format(self.shadow_state['state']['desired']['position'])
         if self.shadow_state['state']['desired']['duration'] > MAX_DURATION:
             return "Error: duration: {0} is longer than max value: {1}".format(self.shadow_state['state']['desired']['duration'], MAX_DURATION)
@@ -275,26 +324,33 @@ class Shade_controller:
         if self.pstate['position'] == self.shadow_state['state']['desired']['position']:
             return "Already in position: " + self.shadow_state['state']['desired']['position']
         
-        duration = self.shadow_state['state']['desired']['duration'] * 1000; #convert to millisecond
+        duration = self.shadow_state['state']['desired']['duration'] * 1000 #convert to millisecond
         
         direction = self.LOWER
-        if self.shadow_state['state']['desired']['position'] == 'open': direction = self.RAISE
-        if self.shadow_state['state']['desired']['position'] == 'half':
-            if self.pstate['position'] == 'closed': direction = self.RAISE
-            # if the current position is unknown, the direction will be to lower, and the current position will stay unknown.
+        if self.shadow_state['state']['desired']['position'] == POSITIONS[Positions.OPEN]:
+            direction = self.RAISE
+        # halve the duration if currently in the half position or going to the half position
+        if self.shadow_state['state']['desired']['position'] == POSITIONS[Positions.HALF]:
+            duration = duration >> 1
+            if self.pstate['position'] == POSITIONS[Positions.CLOSED]:
+                direction = self.RAISE
+        # if the current position is unknown, the direction will be to lower, and the current position will stay unknown.
+        if self.pstate['position'] == POSITIONS[Positions.HALF]:
             duration = duration >> 1;
-        #halve the duration if currently in the half position (desired should be open or closed)
-        if self.pstate['position'] == 'half': duration = duration >> 1;
         
-        # invert direction if top_down, as indicated by bit 1: 0x0010
+        # invert direction if shade is of type 'top_down', as indicated by bit 1: 0x0010
         if (self.shadow_state['state']['desired']['reverse'] & 2) != 0:
-            direction = ~direction
+            direction = direction^1
         
         # dont move much when lowering if position is unknown since the current sensor can't be used to figure the stopping position
-        if self.pstate['position'] == 'unknown' and direction == self.LOWER:
+        if self.pstate['position'] not in POSITIONS and direction == self.LOWER:
             duration = 200;
+
+        # it takes longer to go the same distance when raising, so increase the duration by about 10%
+        if direction == self.RAISE:
+            duration = duration + (duration >> 4) + (duration >> 5)
         
-        measured_duration = self._activate_motor(duration, direction);
+        measured_duration = self._activate_motor(duration, direction)
         if measured_duration > 1:
             if direction == self.RAISE or measured_duration >= duration:
                 self.pstate['position'] = self.shadow_state['state']['desired']['position']
@@ -308,8 +364,6 @@ class Shade_controller:
             status = "Error on position; I2C error: {0}".format(measured_duration)
         return status
 
-
-    ''' ==== tests that can be run when the 'test' parameter changes to a new value  ===='''
     def _dispatch_test(self):
         """ calls one of the test functions based on the string in the shadow_state 'test' variable
             Inputs: shadow_state
@@ -380,7 +434,6 @@ class Shade_controller:
                 return "No i2c devices detected"
             self.current_sensor = INA219(i2c=self.i2c, i2c_addr=self.INA219_ADDR)
         return None
-    
 
     def _activate_motor(self, duration, direction):
         """Instantiates a motor and turns on the motor driver for the duration (expressed in milliseconds)
@@ -393,6 +446,8 @@ class Shade_controller:
         
         #invert direction if reverse bit is set
         motor_direction = direction ^ (self.shadow_state['state']['desired']['reverse'] & 1)
+        self.motor = Motor(self.PIN_MOTOR_ENABLE1, self.PIN_MOTOR_ENABLE2)
+
         #enable 12V and disable charging
         if self.ppin_power_enable is None:
             self.ppin_power_enable = machine.Pin(self.PIN_POWER_ENABLE, machine.Pin.OUT, value=1)
@@ -405,12 +460,9 @@ class Shade_controller:
             self.ppin_charging_disable.value(0)
         utime.sleep_ms(50) # wait for power to stabilize
 
-        if self.motor1 is None:
-            self.motor1 = Motor(self.PIN_MOTOR_ENABLE1, self.PIN_MOTOR_ENABLE2)
         self.current_sensor.start()
-
         start_ticks = utime.ticks_ms()
-        self.motor1.start(direction=motor_direction, speed=self.MOTOR_START_SPEED)
+        self.motor.start(direction=motor_direction, speed=self.MOTOR_START_SPEED)
         
         while elapsed_time < duration:
             sample_ticks_begin = utime.ticks_ms()
@@ -418,7 +470,7 @@ class Shade_controller:
             
             # !! TODO: stop calling adjustSpeed after calling it N times
             if (current_sample < self.shadow_state['state']['desired']['threshold']):
-                self.motor1.adjust_speed(self.MOTOR_SPEED_RAMP)
+                self.motor.adjust_speed(self.MOTOR_SPEED_RAMP)
             
             # check the avg of the last N samples don't exceed the threshold
             self.averaging_sum = 0
@@ -437,12 +489,16 @@ class Shade_controller:
             utime.sleep_ms(delay_time)
             elapsed_time = utime.ticks_ms() - start_ticks;
 
-        self.motor1.stop()
+        self.motor.stop()
         self.ppin_power_enable.value(0)
         self.ppin_charging_disable.value(1)
+        # re-init pins so they are tri-state
+        self.ppin_power_enable.init(machine.Pin.IN)
+        self.ppin_charging_disable.init(machine.Pin.IN)
+        self.motor.deinit()
+        del self.motor
         self.current_sensor.stop()
         return elapsed_time
-
 
     def _update_current_arrays(self):
         import utime

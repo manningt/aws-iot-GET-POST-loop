@@ -44,7 +44,7 @@ def main():
     wlan = network.WLAN()
     esp.sleep_type(esp.SLEEP_NONE) # don't shut off wifi when sleeping
     connected = None
-    for attempt in range(12):
+    for attempt in range(20):
         connected = wlan.isconnected()
         if connected:
             break
@@ -59,9 +59,9 @@ def main():
     t_secs = 0 # number of seconds from the year 2000
     for attempt in range(5):
         t_secs = get_ntp_time()
-        if (t_secs != 0):
+        if t_secs != 0:
             break
-    if (t_secs == 0):
+    if t_secs == 0:
         thing.goto_sleep(cause="Error: failed to connect to NTP server")
 
     thing.blink_led() #3rd blink: after getting time from NTP
@@ -88,9 +88,13 @@ def main():
             print('Invalid state recieved: '.format(thing.shadow_state))
             thing.goto_sleep(cause="{0} -- Error: Invalid shadow state recieved from AWS".format(date_time))
         thing.blink_led() #4th blink - after GET shadow state
+        # print("calling process_shadow_state")
         thing.process_shadow_state()
+        # print("returned from process_shadow_state")
     else:
-        thing.goto_sleep(cause="{0} -- Error on GET: response code: {1}".format(date_time, r.status_code))
+        err_str = "{} -- Error on GET: code: {}  reason: {}".format(date_time, r.status_code, r.reason)
+        print(err_str)
+        thing.goto_sleep(cause=err_str)
 
     # check conditions: the thing can check battery metrics, environmental conditions, etc.
     thing.check_conditions(t_secs)
@@ -115,15 +119,11 @@ def main():
         # not using json as data in POST to save a second encoding
         r = requests.post(endpoint, headers=request_dict["headers"], data=post_body_str)
         if r.status_code != 200:
-            print("Error on Post: response code: {0}".format(r.status_code))
+            err_str = "{} -- Error on POST: code: {}  reason: {}".format(date_time, r.status_code, r.reason)
+            print(err_str)
+            thing.goto_sleep(cause=err_str)
 #            print("post_reply: ", end ="")
 #            print(r.json())
-            thing.goto_sleep(cause="{0} -- Error on POST: response code: {1}".format(date_time, r.status_code))
-
-        print("StartingCurrents: ", end="")
-        print(thing.starting_currents)
-        print("StoppingCurrents: ", end="")
-        print(thing.stopping_currents)
 
     elapsed_msecs = utime.ticks_diff(utime.ticks_ms(), start_ticks)
     print("Main took: {0} msec. ---  Free mem before exit: {1}".format(elapsed_msecs, gc.mem_free()))
@@ -138,5 +138,7 @@ def get_aws_info():
         with open(AWS_INFO_FILENAME) as f:
             aws_info = ujson.load(f)
         return aws_info
-    except OSError:
+    except OSError as e:
+        e_str = str(e)
+        print('exception on get_aws_info:'.format(e_str))
         return None
