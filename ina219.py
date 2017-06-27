@@ -10,7 +10,7 @@ class INA219(object):
         self.i2c_addr = i2c_addr
         
         value = bytearray(2)
-        self.i2c.readfrom_mem_into(self.i2c_addr, self.__INA219_REG_CONFIG, value)
+        self.i2c.readfrom_mem_into(self.i2c_addr, self._INA219_REG_CONFIG, value)
         if ((value[1] & 0x07) == 0):
             self.in_standby_when_initialized = True;
 
@@ -19,7 +19,7 @@ class INA219(object):
         calstr = bytearray(2)
         calstr[0] = ((BRNG&0x01)<<5)+((PG&0x03)<<3)+((BADC>>1)&0x07)
         calstr[1] = ((BADC&0x01)<<7)+((SADC&0x0F)<<3)+(MODE&0x07)
-        self.i2c.writeto_mem(self.i2c_addr, self.__INA219_REG_CONFIG , calstr)
+        self.i2c.writeto_mem(self.i2c_addr, self._INA219_REG_CONFIG , calstr)
 
     def get_current_ma(self):
         value = bytearray(2)

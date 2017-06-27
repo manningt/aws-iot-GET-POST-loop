@@ -15,7 +15,7 @@ class Shade_controller:
     
     import array
     # pre-allocate current sample arrays - used by the position routine to threshold motor currents
-    STARTING_CURRENT_SAMPLE_COUNT = const(32)
+    STARTING_CURRENT_SAMPLE_COUNT = const(16)
     starting_currents = array.array('i', (0 for _ in range(STARTING_CURRENT_SAMPLE_COUNT)))
     starting_current_next = 0
     STOPPING_CURRENT_SAMPLE_COUNT = const(16)
@@ -41,7 +41,7 @@ class Shade_controller:
         self.PIN_SCL = 5                #D1
         self.PIN_SDA = 4                #D2
         self.I2C_FREQ = 100000
-        #self.INA219_ADDR = 0x40 #64 on the adafruit module
+        # self.INA219_ADDR = 0x40 #64 on the adafruit module
         self.INA219_ADDR = 0x45 #69
         
         self.MOTOR_START_SPEED = 30     # speed is in percentage
@@ -52,7 +52,7 @@ class Shade_controller:
         self.LOWER = 0
         self.RAISE = 1
 
-        self.BATTERY_SAMPLE_INTERVAL = 450 #15 minutes
+        self.BATTERY_SAMPLE_INTERVAL = 450 #7 minutes  !!change to 1200
         
         """ the following dictionary are functions that are called when a desired state variable changes:
             the dictionary would be modified to expose more variables/functions for different devices
@@ -61,7 +61,7 @@ class Shade_controller:
 
         """pstate are parameters that are stored in flash and over-written by desired values provided by the AWS-IOT Shadow
             - position is persisted because it may not be equal to the desired value (uninitialized or in error)
-            - sleep & awake are persisted because they are used even if unable to get the desired values from AWS
+            - sleep is persisted because they are used even if unable to get the desired values from AWS
             - test and test_param are persisted so they can be compared to the new desired state
             
             the pstate can get updated to reflect the AWS shadow desired state.
@@ -71,7 +71,7 @@ class Shade_controller:
             
             the default of 0 for sleep allows recovery if the network is not reachable.
             """
-        self.pstate = {'sleep':0, 'awake':4, 'test':'unknown', 'test_param':0, 'position':'unknown'}
+        self.pstate = {'sleep':0, 'test':'unknown', 'test_param':0, 'position':'unknown'}
         self.restored_state = None
         #NON-PERSISTED_STATE = ('duration', 'reverse', 'threshold')
 
@@ -91,21 +91,24 @@ class Shade_controller:
         id_binary = [id_reversed[n] for n in range(len(id_reversed) - 1, -1, -1)]
         self.id = 'ESP-' + ''.join('{:02x}'.format(x) for x in id_binary)
         # command history is stored in the RTC
-        self.rtc = machine.RTC()
-        self.history = self.rtc.memory().decode("utf8").split("\n")
         self.previous_action = None
-        if len(self.history[0]) > 0:
-            print("Last action: " + self.history[0])
-            self.previous_action = self.history[0].split("|")
-            #previous action = strt/done|key|value|metadata_timestamp|status
-            if len(self.previous_action) < 4:
-                self.previous_action = None
+        self.history = None
+        if "RTC" in dir(machine):
+            self.rtc = machine.RTC()
+            self.history = self.rtc.memory().decode("utf8").split("\n")
+            if len(self.history[0]) > 0:
+                print("Last action: " + self.history[0])
+                self.previous_action = self.history[0].split("|")
+                #previous action = strt/done|key|value|metadata_timestamp|status
+                if len(self.previous_action) < 4:
+                    self.previous_action = None
 
     def process_shadow_state(self):
         """ Input: is an updated shadow_state at the class level; shadow_state was not passed in as an arg to avoid the memory allocation
             Return: None
             Output: an updated reported_state at the class level, which does not have to be used immediately
         """
+        import machine
         status = self._instance_current_sensor()
         current_action = None
         if self.current_sensor is not None and not self.current_sensor.in_standby_when_initialized:
@@ -120,7 +123,6 @@ class Shade_controller:
 
         # the following state variables do not have an 'action'; just update them so they'll be persisted after the 'action' is done
         self.pstate['sleep'] = self.shadow_state['state']['desired']['sleep']
-        self.pstate['awake'] = self.shadow_state['state']['desired']['awake']
         # test and position variables are updated in the function that processes them.
 
         if self.pstate['test'] == 'unknown':
@@ -137,7 +139,11 @@ class Shade_controller:
                 timestamp_changed = self.shadow_state['metadata']['desired'][key] != self.previous_action[3]
             if shadow_state_changed and timestamp_changed:
                 current_action = "strt|{}|{}|{}|TBD\n".format(key,self.shadow_state['state']['desired'][key], self.shadow_state['metadata']['desired'][key]['timestamp'])
-                self.rtc.memory(current_action + self.history[0])
+                if "RTC" in dir(machine):
+                    if self.history is not None:
+                        self.rtc.memory(current_action + self.history[0])
+                    else:
+                        self.rtc.memory(current_action)
                 status = self.DISPATCH[key]()
                 # dispatch only one delta per GET/POST cycle so the status is updated serially
                 break
@@ -167,20 +173,27 @@ class Shade_controller:
             if current_action is not None:
                 current_action = current_action.replace("strt","done")
                 current_action = current_action.replace("TBD",status)
-                self.rtc.memory(current_action + self.history[0])
+                if "RTC" in dir(machine):
+                    if self.history is not None:
+                        self.rtc.memory(current_action + self.history[0])
+                    else:
+                        self.rtc.memory(current_action)
 
         if self.starting_currents[0] != 0:
-            currents = ""
+            currents = None
             for i in self.starting_currents:
-                currents = currents + "{} ".format(i)
+                if i == 0:
+                    currents = "{}".format(i)
+                else:
+                    currents = "{} {}".format(currents, i)
             self.reported_state['starting_currents'] = currents
-            #stopping currents start at next - 1 and loop around
-            currents = ""
-            idx = self.stopping_current_next - 1
-            if idx < 0:
-                idx = self.STOPPING_CURRENT_SAMPLE_COUNT - 1
+            #stopping currents start at next and loop around
+            idx = self.stopping_current_next
             for _ in self.stopping_currents:
-                currents = currents + "{} ".format(self.stopping_currents[idx])
+                if idx == self.stopping_current_next:
+                    currents = "{}".format(self.stopping_currents[idx])
+                else:
+                    currents = "{} {}".format(currents, self.stopping_currents[idx])
                 idx += 1
                 if (idx > self.STOPPING_CURRENT_SAMPLE_COUNT - 1):
                     idx = 0
@@ -198,7 +211,12 @@ class Shade_controller:
         return
 
     def goto_sleep(self,cause=None):
-        import webrepl, machine, sys, utime
+        import machine, sys, utime
+        try:
+            import webrepl
+        except:
+            webrepl = None
+
         LOG_FILENAME = "./log.txt"
         
         if cause is not None:
@@ -213,32 +231,30 @@ class Shade_controller:
             if self.pstate['sleep'] < 1:
                 # exit: stop the infinite loop of main & deep-sleep
                 print("Staying awake due to sleep parameter < 1.")
-                webrepl.start()
-                # configure timer to reset after 3 minutes, then it will fetch a new shadow statw
-                tim = machine.Timer(-1)
-                tim.init(period=120000, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
+                if webrepl is not None:
+                    webrepl.start()
+                    # configure timer to reset after 3 minutes, then it will fetch a new shadow state
+                    tim = machine.Timer(-1)
+                    tim.init(period=120000, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
                 sys.exit(0)
         else:
             with open(LOG_FILENAME, 'a') as log_file:
                 log_file.write("Exit due missing sleep parameter.\n")
             sys.exit(-1)
-        
-        # multiply awake time by 1024 to convert from seconds to milliseconds
-        while elapsed_msecs < (self.pstate['awake'] << 10):
-            for _ in range(4):
-                self.blink_led()
-                utime.sleep_ms(100)
-            utime.sleep_ms(1900)
-            elapsed_msecs = utime.ticks_diff(utime.ticks_ms(), start_ticks)
 
         print("Going to sleep for {0} seconds.".format(self.pstate['sleep']))
-        webrepl.stop()
-        utime.sleep_ms(1000)
-        rtc = machine.RTC()
-        rtc.irq(trigger=rtc.ALARM0, wake=machine.DEEPSLEEP)
-        # multiply sleep time by approx 1000 (left shift by 10)
-        rtc.alarm(rtc.ALARM0, self.pstate['sleep'] << 10)
-        machine.deepsleep()
+        if "RTC" in dir(machine):
+            webrepl.stop()
+            utime.sleep_ms(1000)
+            rtc = machine.RTC()
+            rtc.irq(trigger=rtc.ALARM0, wake=machine.DEEPSLEEP)
+            # multiply sleep time by approx 1000 (left shift by 10)
+            rtc.alarm(rtc.ALARM0, self.pstate['sleep'] << 10)
+            machine.deepsleep()
+        else:
+            print("No deep sleep yet.. emulating")
+            utime.sleep_ms(self.pstate['sleep'] << 10)
+            machine.reset()
 
     def check_conditions(self, timestamp):
         """Creates battery voltage, current and charge rate dictionary to send to AWS-IOT.
@@ -426,12 +442,13 @@ class Shade_controller:
         if  self.current_sensor is None:
             if self.i2c is None:
                 self.i2c = machine.I2C(scl=machine.Pin(self.PIN_SCL), sda=machine.Pin(self.PIN_SDA), freq=self.I2C_FREQ)
-            try:
-                self.i2c_devices = self.i2c.scan()
-            except:
-                return "Exception i2c bus scan"
-            if (len(self.i2c_devices) < 1):
-                return "No i2c devices detected"
+            # the following is commented out to save power
+            # try:
+            #     self.i2c_devices = self.i2c.scan()
+            # except:
+            #     return "Exception i2c bus scan"
+            # if (len(self.i2c_devices) < 1):
+            #     return "No i2c devices detected"
             self.current_sensor = INA219(i2c=self.i2c, i2c_addr=self.INA219_ADDR)
         return None
 
