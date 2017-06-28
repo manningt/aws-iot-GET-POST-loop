@@ -1,7 +1,7 @@
 # aws-iot-GET-POST-loop
 Micropython code which uses the AWS-IOT REST API to GET/POST device state info.
 
-This was only tested on an ESP8266.
+This was tested on an ESP8266 and ESP32 using micropython 1.8.7 and 1.9.
 
 There are 3 primary modules:
   * aws_thing_loop: instances a thing, GETs the AWS shadow state for the thing, and POSTs the reported state to AWS
@@ -11,11 +11,6 @@ There are 3 primary modules:
 The use case is an IoT application where the device sleeps most of the time (to save battery) and retrieve commands from the cloud when the device wakes up. A motorized window treatment which uses a processor to control a motor and position a shade/curtain is an example. It wakes up and retrieves the desired position every few minutes. If the desired position is different than the current position, the processor controls the motor to change the position to the desired position.
 
 The aws_thing_loop requires this module: https://github.com/manningt/aws-signature-iot-python
-
-The aws_thing_loop requires the following modified micropython modules; the modifications may get absorbed into the standard micropython libraries eventually:
-  * ntptime.py: allows throwing an exception
-  * urequests: reads the content-length from the header and uses the length when issuing the read for the body
-  * hmac: changed the update to allow binary keys; does not do a copy when asking for the digest
 
 The shade_controller module uses 2 classes to drive components:
   * motor.py
