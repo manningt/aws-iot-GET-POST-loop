@@ -9,9 +9,9 @@ class Shade_controller:
         
         """
     # the following state can be directly accessed by the instantiating module
-    shadow_state = {}       #holds the shadow state obtained from AWS-IOT; not modified by the controller
-    reported_state = {}     #holds the state to be posted to the shadow; written by the controller
-    id = None               #An unique ID for the device that can be used as the shadow ID
+    shadow_state = {}       # holds the shadow state obtained from AWS-IOT; not modified by the controller
+    reported_state = {}     # holds the state to be posted to the shadow; written by the controller
+    id = None               # unique ID for the device that can be used as the shadow ID
     
     import array
     # pre-allocate current sample arrays - used by the position routine to threshold motor currents
@@ -24,8 +24,31 @@ class Shade_controller:
     
     def __init__(self):
         import machine
+        if "reset_cause" in dir(machine):
+            rst = machine.reset_cause()
+            print('reset-cause: ', end='')
+            if rst == machine.PWRON_RESET:  # -- 0
+                print('PWRON')
+            elif rst == machine.WDT_RESET:  # -- 1
+                print('WDT')
+            elif rst == machine.SOFT_RESET:  # -- 4
+                print('SOFT')
+            elif rst == machine.DEEPSLEEP_RESET:  # -- 5
+                print('DEEPSLEEP')
+            elif rst == machine.HARD_RESET:  # -- 6
+                print('HARD')
+                # overlap of deepsleep & soft_reset: elif rst = machine.DEEPSLEEP: # -- 4
 
-        self.PSTATE_FILENAME = "./pstate.txt"
+        super().__init__()
+        # if a parameter is not restored from persistence, then add it with a default value
+        if 'position' not in self._current_state['params']:
+            self._current_state['params']['position'] = "unknown"
+        self._operations['position'] = self._position
+        # add tests to dictionary of available test operations
+        self._test_operations['current'] = self._test_current_sensor
+        self._test_operations['motor'] = self._test_motor
+        self._test_operations['set-position'] = self._set_position
+
         # the following are the GPIO numbers
         self.PIN_LED = 2
         self.PIN_POWER_ENABLE = 14      # D5 on the nodeMCU board
@@ -52,28 +75,7 @@ class Shade_controller:
         self.LOWER = 0
         self.RAISE = 1
 
-        self.BATTERY_SAMPLE_INTERVAL = 450 #7 minutes  !!change to 1200
-        
-        """ the following dictionary are functions that are called when a desired state variable changes:
-            the dictionary would be modified to expose more variables/functions for different devices
-            """
-        self.DISPATCH = {'test': self._dispatch_test, 'test_param': self._dispatch_test, 'position' : self._position}
-
-        """pstate are parameters that are stored in flash and over-written by desired values provided by the AWS-IOT Shadow
-            - position is persisted because it may not be equal to the desired value (uninitialized or in error)
-            - sleep is persisted because they are used even if unable to get the desired values from AWS
-            - test and test_param are persisted so they can be compared to the new desired state
-            
-            the pstate can get updated to reflect the AWS shadow desired state.
-            However, the persisted position is the REAL position, which may not be the desired position
-            
-            pstate starts with defaults, which will get over-written by the values read from persistent store (flash)
-            
-            the default of 0 for sleep allows recovery if the network is not reachable.
-            """
-        self.pstate = {'sleep':0, 'test':'unknown', 'test_param':0, 'position':'unknown'}
-        self.restored_state = None
-        #NON-PERSISTED_STATE = ('duration', 'reverse', 'threshold')
+        self.BATTERY_SAMPLE_INTERVAL = 1200
 
         self.ppin_led = None
         self.ppin_power_enable = machine.Pin(self.PIN_POWER_ENABLE, machine.Pin.OUT, value=0)
@@ -84,30 +86,113 @@ class Shade_controller:
         #the following are used by _activate_motor to detect current threshold crossing
         self.averaging_sum = 0
         self.average_current_threshold = 0
-    
-        self._restore_state()
-    
-        id_reversed = machine.unique_id()
-        id_binary = [id_reversed[n] for n in range(len(id_reversed) - 1, -1, -1)]
-        self.id = 'ESP-' + ''.join('{:02x}'.format(x) for x in id_binary)
-        # command history is stored in the RTC
-        self.previous_action = None
-        self.history = None
+
+        self.rtc = None
         if "RTC" in dir(machine):
             self.rtc = machine.RTC()
-            self.history = self.rtc.memory().decode("utf8").split("\n")
-            if len(self.history[0]) > 0:
-                print("Last action: " + self.history[0])
-                self.previous_action = self.history[0].split("|")
-                #previous action = strt/done|key|value|metadata_timestamp|status
-                if len(self.previous_action) < 4:
-                    self.previous_action = None
+
+    def connect(self):
+        """ activates the wlan and polls to see if connected
+            returns a tuple:
+              - a boolean to indicate successful connection or not
+              - a msg to display if connection failed
+        """
+        import esp, network
+        from sys import platform
+        from utime import sleep_ms
+
+        if "sleep_type" in dir(esp):
+            esp.sleep_type(esp.SLEEP_NONE)  # don't shut off wifi when sleeping
+        wlan = network.WLAN(network.STA_IF)
+        wlan.active(True)
+        if platform == 'esp32':
+            cfg_info = self._get_cfg_info("wifi_info.txt")
+            if not cfg_info:
+                setwifi()
+            cfg_info = self._get_cfg_info("wifi_info.txt")
+            if not cfg_info:
+                return False, "Error: could not obtain wifi configuration"
+            wlan.connect(cfg_info['SSID'], cfg_info['password'])
+
+        connected = False
+        for _ in range(20):
+            connected = wlan.isconnected()
+            if connected:
+                return True, None
+            else:
+                sleep_ms(333)
+        if not connected:
+            from setwifi import setwifi as setwifi
+            setwifi()
+            return False, "Warning: unable to connect to WiFi; setWiFi run to get new credentials"
+            # thing.goto_sleep(cause="Warning: unable to connect to WiFi; setWiFi run to get new credentials")
+
+    @property
+    def id(self):
+        from machine import unique_id
+        id_reversed = unique_id()
+        id_binary = [id_reversed[n] for n in range(len(id_reversed) - 1, -1, -1)]
+        self.id = 'ESP-' + ''.join('{:02x}'.format(x) for x in id_binary)
+
+    def time(self):
+        from ntptime import time as get_ntp_time
+        t_secs = None  # number of seconds from the year 2000
+        for _ in range(6):
+            try:
+                t_secs = get_ntp_time()
+                break
+            except Exception as e:
+                print("Exception in get NTP: {}".format(str(e)))
+        return t_secs
+
+    def sleep(self,msg=None):
+        import machine
+        from sys import exit
+        from utime import sleep_ms
+        try:
+            import webrepl
+        except:
+            webrepl = None
+
+        reset_timeout = 120000 # 3 minutes in milliseconds
+
+        LOG_FILENAME = "./log.txt"
+        if msg is not None:
+            print(msg)
+            with open(LOG_FILENAME, 'a') as log_file:
+                log_file.write(cause + "\n")
+
+        if self._current_state['params']['sleep'] < 1:
+            # exit: stop the infinite loop of main & deep-sleep
+            print("Staying awake due to sleep parameter < 1.")
+            if webrepl is not None:
+                webrepl.start()
+                # configure timer to reset after a period, so the device will fetch a new shadow state
+                tim = machine.Timer(-1)
+                tim.init(period=reset_timeout, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
+            exit(0)
+
+        print("Going to sleep for {0} seconds.".format(self._current_state['params']['sleep']))
+        if "RTC" in dir(machine):
+            if webrepl is not None: webrepl.stop()
+            sleep_ms(1000)
+            rtc = machine.RTC()
+            rtc.irq(trigger=rtc.ALARM0, wake=machine.DEEPSLEEP)
+            # multiply sleep time by approx 1000 (left shift by 10)
+            rtc.alarm(rtc.ALARM0, self.pstate['sleep'] << 10)
+            machine.deepsleep()
+        else:
+            print("No deep sleep yet.. emulating")
+            sleep_ms(self._current_state['params']['sleep'] << 10)
+            machine.reset()
 
     def process_shadow_state(self):
         """ Input: is an updated shadow_state at the class level; shadow_state was not passed in as an arg to avoid the memory allocation
             Return: None
             Output: an updated reported_state at the class level, which does not have to be used immediately
         """
+        #NON-PERSISTED_STATE = ('duration', 'reverse', 'threshold')
+
         import machine
         status = self._instance_current_sensor()
         current_action = None
@@ -157,15 +242,16 @@ class Shade_controller:
             # On start-up, there is no reported dictionary
             if key in self.pstate:
                 # persisted keys
-                if ('reported' not in self.shadow_state['state']) or \
-                        (key not in self.shadow_state['state']['reported']) or \
-                        (self.shadow_state['state']['reported'][key] != self.pstate[key]):
+                # if there was no pstate file, then do a report
+                if 'reported' not in self.shadow_state['state'] or \
+                        key not in self.shadow_state['state']['reported'] or \
+                        self.shadow_state['state']['reported'][key] != self.pstate[key]:
                     self.reported_state[key] = self.pstate[key]
             else:
                 # non-persisted keys
-                if ('reported' not in self.shadow_state['state']) or \
-                        (key not in self.shadow_state['state']['reported']) or \
-                        (self.shadow_state['state']['reported'][key] != value):
+                if 'reported' not in self.shadow_state['state'] or \
+                        key not in self.shadow_state['state']['reported'] or \
+                        self.shadow_state['state']['reported'][key] != value:
                     self.reported_state[key] = value
 
         if status is not None:
@@ -199,78 +285,19 @@ class Shade_controller:
                     idx = 0
             self.reported_state['stopping_currents'] = currents
 
-    def blink_led(self, t=50):
-        import machine, utime
-        if self.ppin_led is None:
-            self.ppin_led = machine.Pin(self.PIN_LED, machine.Pin.OUT, value=0)
-        else:
-            self.ppin_led.init(machine.Pin.OUT)
-        utime.sleep_ms(t)
-        # leave the pin as an input to not mess up any pin state in reset requirements
-        self.ppin_led.init(machine.Pin.IN)
-        return
-
-    def goto_sleep(self,cause=None):
-        import machine, sys, utime
-        try:
-            import webrepl
-        except:
-            webrepl = None
-
-        LOG_FILENAME = "./log.txt"
-        
-        if cause is not None:
-            print(cause)
-            with open(LOG_FILENAME, 'a') as log_file:
-                log_file.write(cause + "\n")
-
-        start_ticks = utime.ticks_ms()
-        elapsed_msecs = 0
-
-        if 'sleep' in self.pstate:
-            if self.pstate['sleep'] < 1:
-                # exit: stop the infinite loop of main & deep-sleep
-                print("Staying awake due to sleep parameter < 1.")
-                if webrepl is not None:
-                    webrepl.start()
-                    # configure timer to reset after 3 minutes, then it will fetch a new shadow state
-                    tim = machine.Timer(-1)
-                    tim.init(period=120000, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
-                sys.exit(0)
-        else:
-            with open(LOG_FILENAME, 'a') as log_file:
-                log_file.write("Exit due missing sleep parameter.\n")
-            sys.exit(-1)
-
-        print("Going to sleep for {0} seconds.".format(self.pstate['sleep']))
-        if "RTC" in dir(machine):
-            webrepl.stop()
-            utime.sleep_ms(1000)
-            rtc = machine.RTC()
-            rtc.irq(trigger=rtc.ALARM0, wake=machine.DEEPSLEEP)
-            # multiply sleep time by approx 1000 (left shift by 10)
-            rtc.alarm(rtc.ALARM0, self.pstate['sleep'] << 10)
-            machine.deepsleep()
-        else:
-            print("No deep sleep yet.. emulating")
-            utime.sleep_ms(self.pstate['sleep'] << 10)
-            machine.reset()
-
-    def check_conditions(self, timestamp):
-        """Creates battery voltage, current and charge rate dictionary to send to AWS-IOT.
+    @property
+    def reported_state(self):
+        """Adds battery voltage, current to report dictionary to be sent to AWS-IOT.
             compares the shadow metadata timestamp with the NTP time to determine if an update should occur
             Note: shadow timestamp is from 1970-01-01 whereas micropython is 2000-01-01
                   So one has to subtract 946684800 from the comparison
-
-            Input: timestano
-            Return: None
-            Output: an updated reported_state at the class level and battery_log files
             """
         do_update = False
-        if 'metadata' in self.shadow_state and 'reported' in self.shadow_state['metadata'] and 'batteryVoltage' in self.shadow_state['metadata']['reported']:
+        if 'metadata' in self.shadow_state and 'reported' in self.shadow_state['metadata'] and 'batteryVoltage' in \
+                self.shadow_state['metadata']['reported']:
             bv_ts = self.shadow_state['metadata']['reported']['batteryVoltage']['timestamp']
             delta_ts = timestamp + 946684800 - bv_ts
-#            print("metadata_ts: {0}  -- ntp_ts: {1} -- delta: {2}".format(bv_ts, timestamp, delta_ts))
+            # print("metadata_ts: {0}  -- ntp_ts: {1} -- delta: {2}".format(bv_ts, timestamp, delta_ts))
             if delta_ts > self.BATTERY_SAMPLE_INTERVAL:
                 do_update = True
         else:
@@ -282,37 +309,37 @@ class Shade_controller:
             self.reported_state['batteryCurrent'] = self.current_sensor.get_current_ma()
             self.current_sensor.stop()
 
-    def _persist_state(self):
-        # only perform flash write if the restored state not equal to current pstate
-        state_change = False
-        if self.restored_state is not None:
-            for key in self.pstate:
-                if self.pstate[key] != self.restored_state[key]:
-                    state_change = True
-                    break
+        super().reported_state()
+
+    def blink_led(self, t=50):
+        import machine
+        from utime import sleep_ms
+        if self.ppin_led is None:
+            self.ppin_led = machine.Pin(self.PIN_LED, machine.Pin.OUT, value=0)
         else:
-            state_change = True
-        if state_change:
-            import ujson
-            # there is no ujson.dump, only ujson.dumps in micropython
-            try:
-                with open(self.PSTATE_FILENAME, "w") as f:
-                    f.write(ujson.dumps(self.pstate))
-            except OSError:
-                return "Error: persisting state failed."
-        return None
+            self.ppin_led.init(machine.Pin.OUT)
+        sleep_ms(t)
+        # leave the pin as an input to not mess up any pin state in reset requirements
+        self.ppin_led.init(machine.Pin.IN)
+
+    def _persist_state(self):
+        import machine
+        if self.rtc is not None:
+            self.rtc.memory(self._current_state)
+        else:
+            super()._persist_state()
 
     def _restore_state(self):
-        import ujson
-        # if no pstate file then defaults will be used
-        try:
-            with open(self.PSTATE_FILENAME) as f:
-                self.restored_state = ujson.load(f)
-            # copy restored state to pstate
-            for key in self.restored_state:
-                self.pstate[key] = self.restored_state[key]
-        except OSError:
-            print('Warning (restore_state): no pstate file')
+        import machine
+        if "RTC" in dir(machine):
+            if self.rtc is not None:
+            rtc_mem = self.rtc.memory().decode("utf8")
+            if type(rtc_mem) is not dict or 'params' not in rtc_mem:
+                print("Warning (restore_state): RTC memory did not have parameters")
+                rtc_mem = {}
+            return rtc_mem
+        else:
+            super()._restore_state()
 
     def _position(self):
         """ validates shadow state variables: position, duration, reverse -- and then calls _activate_motor
@@ -380,23 +407,6 @@ class Shade_controller:
             status = "Error on position; I2C error: {0}".format(measured_duration)
         return status
 
-    def _dispatch_test(self):
-        """ calls one of the test functions based on the string in the shadow_state 'test' variable
-            Inputs: shadow_state
-            Returns: status string recieved from the test
-            """
-        DISPATCH = {'none' : self._test_none, 'current': self._test_current_sensor, 'motor': self._test_motor, 'set-position': self._set_position}
-        self.pstate['test_param'] = self.shadow_state['state']['desired']['test_param']
-        self.pstate['test'] = self.shadow_state['state']['desired']['test']
-        if self.pstate['test'] in DISPATCH:
-            status = DISPATCH[self.pstate['test']]()
-        else:
-            status = "Unrecognized test: " + self.pstate['test']
-        return status
-
-    def _test_none(self):
-        return "test: none"
-    
     def _set_position(self):
         """ Used to set the persisted 'position' to the current desired position.
             Normally used to transition out of the position==unknown state
@@ -536,4 +546,17 @@ class Shade_controller:
         self.stopping_current_next += 1
         if (self.stopping_current_next > self.STOPPING_CURRENT_SAMPLE_COUNT-1):
             self.stopping_current_next = 0
-        return current_sample;
+        return current_sample
+
+    def _get_cfg_info(filename):
+        # TODO: get the info from a secure store instead of the flash filesystem
+        import ujson
+        try:
+            with open(filename) as f:
+                cfg_info = ujson.load(f)
+            return cfg_info
+        except OSError as e:
+            e_str = str(e)
+            print("Exception (get_cfg_info) filename: {}   Error: {}".format(filename, e_str))
+            return None
+
