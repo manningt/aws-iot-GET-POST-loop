@@ -17,22 +17,29 @@ def main():
     import gc
     import utime
     import ujson
-    import urequests as requests
     import awsiot_sign
-
-    # from shade_controller import Shade_controller
-    # thing = Shade_controller()
+    """ trequests is a modified version of urequests which provides a work-around for AWS not closing the 
+        socket after a request.  It uses the content-length from the headers when reading the data from the socket.
+        Without the modification, the request to AWS hangs since the socket doesn't close.
+        I renamed the module trequests instead of urequests in order to avoid stomping on the micropython-lib
+        The code can be fetched from: 
+        https://github.com/manningt/micropython-lib/tree/urequest-with-content-length/urequests
+    """
+    import trequests as requests
 
     while True:
         if 'thing' in locals():
             del thing
 
-        from unix_thing import Unix_thing
-        thing = Unix_thing()
+        # from signal_thing_unix import SignalThing
+        from signal_thing_esp8266 import SignalThing
+        thing = SignalThing()
+        # from shade_controller import ShadeController
+        # thing = ShadeController()
         """ show_progress is an device specific feature.
-        The device can blink an LED, print a statement or show a progress bar
-        show_progress is called: 
-            after (1) reset/initialization, (2) connecting to WiFi, (3) getting NTP and (4) getting state from AWS-IOT
+            The device can blink an LED, print a statement or show a progress bar
+            show_progress is called after: 
+                (1) reset/initialization, (2) connecting to WiFi, (3) getting the time and (4) getting state from AWS-IOT
         """
         if 'show_progress' in dir(thing): thing.show_progress(1, 4)  # after initialization
 
