@@ -31,8 +31,8 @@ def main():
         if 'thing' in locals():
             del thing
 
-        # from signal_thing_unix import SignalThing
-        from signal_thing_esp8266 import SignalThing
+        from signal_thing_unix import SignalThing
+        # from signal_thing_esp8266 import SignalThing
         thing = SignalThing()
         # from shade_controller import ShadeController
         # thing = ShadeController()
