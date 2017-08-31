@@ -12,11 +12,11 @@ class BaseThing(object):
         """
     def __init__(cls):
         """
-            This method can be overridden by a child class to add more device specific operations and hardware init
+            This method can be overridden by a child class to add more device specific operations and hardware initialization
             super().__init__ should be called early in the child class to set up the data structures
         """
         # the following dictionaries are functions that are called when a desired state variable changes.
-        # the functions can be added by the child class for device specific operations
+        # functions can be added by the child class __init__ function for device specific operations
         cls._operations = {'test': cls._dispatch_test, 'test_param': cls._dispatch_test}
         cls._test_operations = {'none' : cls._test_none}
 

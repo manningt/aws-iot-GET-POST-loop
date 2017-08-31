@@ -68,7 +68,7 @@ def main():
             break
 
         request_dict = awsiot_sign.request_gen(aws_info['endpt_prefix'], thing.id, \
-                                               aws_info['akey'], aws_info['skey'], date_time)
+                                               aws_info['akey'], aws_info['skey'], date_time, region=aws_info['region'])
         endpoint = 'https://' + request_dict["host"] + request_dict["uri"]
 
         try:
@@ -108,7 +108,8 @@ def main():
             date_time = datestamp + "T" + time_now_utc + "Z"
 
             request_dict = awsiot_sign.request_gen(aws_info['endpt_prefix'], thing.id, aws_info['akey'],
-                                                   aws_info['skey'], date_time, method='POST', body=post_body_str)
+                                                   aws_info['skey'], date_time, method='POST',
+                                                   region=aws_info['region'], body=post_body_str)
             gc.collect()
             print("Free mem before POST: {0}".format(gc.mem_free()))
 
