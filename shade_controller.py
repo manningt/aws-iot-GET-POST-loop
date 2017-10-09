@@ -18,9 +18,7 @@ class ShadeController(BaseThing):
                 print('HARD')
                 # overlap of deepsleep & soft_reset: elif rst = machine.DEEPSLEEP: # -- 4
 
-        self.rtc = None
-        if "RTC" in dir(machine):
-            self.rtc = machine.RTC()
+        self.rtc = machine.RTC()
 
         super().__init__()
         # if a parameter is not restored from persistence, then add it with a default value
@@ -34,31 +32,55 @@ class ShadeController(BaseThing):
 
         self.timestamp = None  # will hold number of seconds from the year 2000
 
-        # the following are the GPIO numbers
-        self.PIN_LED = 2
-        self.PIN_POWER_ENABLE = 14      # D5 on the nodeMCU board
-        # self.PIN_MOTOR_ENABLE1 = 12     #D6
-        # self.PIN_MOTOR_ENABLE2 = 13     #D7
-        self.PIN_MOTOR_ENABLE1 = 15     #D8
-        self.PIN_MOTOR_ENABLE2 = 2      #D4
-        # self.PIN_MOTOR_EN1 = [12, 15]
-        # self.PIN_MOTOR_EN2 = [13, 2]
-        self.PIN_CHARGING_DISABLE = 0   #D3
-        self.PIN_WAKEUP = 16            #D0
-        self.PIN_SCL = 5                #D1
-        self.PIN_SDA = 4                #D2
+        PCB_version = 3
+        if PCB_version == 0:
+            # the following are the GPIO numbers
+            self.PIN_LED = 2
+            self.PIN_POWER_ENABLE = 14      # D5 on the nodeMCU board
+            # self.PIN_MOTOR_ENABLE1 = 12     #D6
+            # self.PIN_MOTOR_ENABLE2 = 13     #D7
+            self.PIN_MOTOR_ENABLE1 = 15     #D8
+            self.PIN_MOTOR_ENABLE2 = 2      #D4
+            # self.PIN_MOTOR_EN1 = [12, 15]
+            # self.PIN_MOTOR_EN2 = [13, 2]
+            self.PIN_CHARGING_DISABLE = 0   #D3
+            self.PIN_WAKEUP = 16            #D0
+            self.PIN_SCL = 5                #D1
+            self.PIN_SDA = 4                #D2
+        elif PCB_version == 3:
+            self.PIN_LED = 16
+            self.PIN_POWER_ENABLE = 16
+            self.PIN_MOTOR_ENABLE1 = 5
+            self.PIN_MOTOR_ENABLE2 = 17
+            self.PIN_CHARGING_DISABLE = 21
+            self.PIN_SCL = 22
+            self.PIN_SDA = 23
+        else:
+            import sys
+            print("Unknown PCB_rev".format(PCB_rev))
+            sys.exit(1)
+
         self.I2C_FREQ = 100000
         # self.INA219_ADDR = 0x40 #64 on the adafruit module
-        self.INA219_ADDR = 0x45 #69
-        
+        self.INA219_ADDR = 0x45 #69 decimal
+        self.LM75B_ADDR  = 0x4F #79 decimal
+        self.ATECC508_ADDR = 0x60 #96 decimal
+
         self.ppin_led = None
         self.ppin_power_enable = machine.Pin(self.PIN_POWER_ENABLE, machine.Pin.OUT, value=0)
         self.ppin_charging_disable = machine.Pin(self.PIN_CHARGING_DISABLE, machine.Pin.OUT, value=1)
-        self.i2c = None
-        self.i2c_devices = None
+        self.i2c = machine.I2C(scl=machine.Pin(self.PIN_SCL), sda=machine.Pin(self.PIN_SDA), freq=self.I2C_FREQ)
+        # the following is commented out to save power
+        # i2c_devices = None
+        # try:
+        #     i2c_devices = self.i2c.scan()
+        # except:
+        #     print("Exception i2c bus scan")
+        # if (len(i2c_devices) < 1):
+        #     print("No i2c devices detected")
         self.current_sensor = None
 
-        self.BATTERY_SAMPLE_INTERVAL = 1200
+        self.BATTERY_SAMPLE_INTERVAL = 1200  #report the battery state every 20 minutes
         # the following are shade direction constants that make it easier to understand motor direction
         self.LOWER = 0
         self.RAISE = 1
@@ -88,6 +110,7 @@ class ShadeController(BaseThing):
         import esp, network
         from sys import platform
         from utime import sleep_ms
+        from setwifi import setwifi as setwifi
 
         if "sleep_type" in dir(esp):
             esp.sleep_type(esp.SLEEP_NONE)  # don't shut off wifi when sleeping
@@ -95,22 +118,24 @@ class ShadeController(BaseThing):
         wlan.active(True)
         if platform == 'esp32':
             cfg_info = self._get_cfg_info("wifi_info.txt")
+            # cfg_info = {"SSID": "BayberryLedge", "password": "40Edgemoor"}
             if not cfg_info:
                 setwifi()
+            # setwifi should write the wifi_info file, so read it
             cfg_info = self._get_cfg_info("wifi_info.txt")
             if not cfg_info:
                 return False, "Error: could not obtain wifi configuration"
             wlan.connect(cfg_info['SSID'], cfg_info['password'])
 
+        sleep_ms(3333)
         connected = False
         for _ in range(20):
             connected = wlan.isconnected()
             if connected:
                 return True, None
             else:
-                sleep_ms(333)
+                sleep_ms(666)
         if not connected:
-            from setwifi import setwifi as setwifi
             setwifi()
             return False, "Warning: unable to connect to WiFi; setWiFi run to get new credentials"
 
@@ -122,8 +147,10 @@ class ShadeController(BaseThing):
         return "ESP-" + "".join("{:02x}".format(x) for x in id_binary)
 
     def time(self):
-        from ntptime import time as get_ntp_time
-        for _ in range(6):
+        from get_ntp_time import get_ntp_time
+        from utime import sleep_ms
+        for _ in range(5):
+            sleep_ms(3000)
             try:
                 self.timestamp = get_ntp_time()
                 break
@@ -133,14 +160,12 @@ class ShadeController(BaseThing):
 
     def sleep(self,msg=None):
         import machine
-        from sys import exit
+        from sys import platform
         from utime import sleep_ms
         try:
             import webrepl
         except:
             webrepl = None
-
-        reset_timeout = 120000 # 3 minutes in milliseconds
 
         LOG_FILENAME = "./log.txt"
         if msg is not None:
@@ -150,27 +175,32 @@ class ShadeController(BaseThing):
 
         if self._current_state['params']['sleep'] < 1:
             # exit: stop the infinite loop of main & deep-sleep
+            from sys import exit
             print("Staying awake due to sleep parameter < 1.")
             if webrepl is not None:
                 webrepl.start()
-                # configure timer to reset after a period, so the device will fetch a new shadow state
-                tim = machine.Timer(-1)
-                tim.init(period=reset_timeout, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
+            # configure timer to issue reset, so the device will reboot and fetch a new shadow state
+            TIME_BEFORE_RESET = 120000  # 3 minutes in milliseconds
+            tim = machine.Timer(-1)
+            tim.init(period=TIME_BEFORE_RESET, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
             exit(0)
 
-        print("Going to sleep for {0} seconds.".format(self._current_state['params']['sleep']))
-        if "RTC" in dir(machine):
-            if webrepl is not None: webrepl.stop()
+        if webrepl is not None:
+            webrepl.stop()
             sleep_ms(1000)
-            rtc = machine.RTC()
-            rtc.irq(trigger=rtc.ALARM0, wake=machine.DEEPSLEEP)
+        print("Going to sleep for {0} seconds.".format(self._current_state['params']['sleep']))
+
+        if platform == 'esp32':
             # multiply sleep time by approx 1000 (left shift by 10)
-            rtc.alarm(rtc.ALARM0, self._current_state['params']['sleep'] << 10)
-            machine.deepsleep()
+            machine.deepsleep(self._current_state['params']['sleep'] << 10)
         else:
-            print("No deep sleep yet.. emulating")
-            sleep_ms(self._current_state['params']['sleep'] << 10)
-            machine.reset()
+            self.rtc.irq(trigger=self.rtc.ALARM0, wake=machine.DEEPSLEEP)
+            self.rtc.alarm(self.rtc.ALARM0, self._current_state['params']['sleep'] << 10)
+            machine.deepsleep()
+        # else:
+        #     print("No deep sleep yet.. emulating")
+        #     sleep_ms(self._current_state['params']['sleep'] << 10)
+        #     machine.reset()
 
     # @property
     def _reported_state_get(self):
@@ -208,7 +238,8 @@ class ShadeController(BaseThing):
         else:
             do_update = True
 
-        if do_update and self.current_sensor is not None:
+        if do_update:
+            self._instance_current_sensor()
             self.current_sensor.start()
             self._reported_state['batteryVoltage'] = self.current_sensor.get_bus_mv()
             self._reported_state['batteryCurrent'] = self.current_sensor.get_current_ma()
@@ -352,46 +383,42 @@ class ShadeController(BaseThing):
         """ Operates the motor for the number of milliseconds specified in test_param
             A negative test_param operates the motor in the reverse direction
             """
-        status = self._instance_current_sensor()
-        if status is not None:
-            status = "Fail (motor test): " + status
+        if not self._has_history:
+            status = "Skipping first motor test after initialization"
         else:
-            duration = self._shadow_state['state']['desired']['test_param']
-            if duration < 0:
-                direction = self.LOWER
+            status = self._instance_current_sensor()
+            if status is not None:
+                status = "Fail (motor test): " + status
             else:
-                direction = self.RAISE
-            duration = abs(duration)
-            if duration < 55000:
-                measured_duration = self._activate_motor(duration, direction)
-                if measured_duration >= duration:
-                    status = "Pass: motor on for " + str(measured_duration) + " msec."
+                duration = self._shadow_state['state']['desired']['test_param']
+                if duration < 0:
+                    direction = self.LOWER
                 else:
-                    status = "Fail: motor on for " + str(measured_duration) + " msec."
-            else: status = "Fail: test_param too large for motor test: " + str(duration)
+                    direction = self.RAISE
+                duration = abs(duration)
+                if duration < 55000:
+                    measured_duration = self._activate_motor(duration, direction)
+                    if measured_duration >= duration:
+                        status = "Pass: motor on for " + str(measured_duration) + " msec."
+                    else:
+                        status = "Fail: motor on for " + str(measured_duration) + " msec."
+                else: status = "Fail: test_param too large for motor test: " + str(duration)
         return status
 
     def _instance_current_sensor(self):
-        import machine
         from ina219 import INA219
         status = None
         if  self.current_sensor is None:
             if self.i2c is None:
-                self.i2c = machine.I2C(scl=machine.Pin(self.PIN_SCL), sda=machine.Pin(self.PIN_SDA), freq=self.I2C_FREQ)
-            # the following is commented out to save power
-            # try:
-            #     self.i2c_devices = self.i2c.scan()
-            # except:
-            #     return "Exception i2c bus scan"
-            # if (len(self.i2c_devices) < 1):
-            #     return "No i2c devices detected"
-            try:
-                self.current_sensor = INA219(i2c=self.i2c, i2c_addr=self.INA219_ADDR)
-                if not self.current_sensor.in_standby_when_initialized:
-                    print("Current sensor not in standby.")
-                    self.current_sensor.stop()
-            except:
-                status = "I2C access to current sensor failed"
+                status = "I2C not initialized when creating current sensor"
+            else:
+                try:
+                    self.current_sensor = INA219(i2c=self.i2c, i2c_addr=self.INA219_ADDR)
+                    if not self.current_sensor.in_standby_when_initialized:
+                        print("Current sensor not in standby.")
+                        self.current_sensor.stop()
+                except:
+                    status = "I2C access to current sensor failed"
         return status
 
     def _activate_motor(self, duration, direction):
@@ -480,7 +507,7 @@ class ShadeController(BaseThing):
             self.stopping_current_next = 0
         return current_sample
 
-    def _get_cfg_info(filename):
+    def _get_cfg_info(self, filename):
         # TODO: get the info from a secure store instead of the flash filesystem
         import ujson
         try:
