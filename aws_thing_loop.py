@@ -1,4 +1,4 @@
-def main():
+def main(thing_type='Signal'):
     """ This function uses the AWS-IOT REST API to GET shadow state and POST state updates
         Refer to: http://docs.aws.amazon.com/iot/latest/developerguide/iot-thing-shadows.html
         This function is meant to be called after the processor wakes up.
@@ -31,11 +31,19 @@ def main():
         if 'thing' in locals():
             del thing
 
-        from signal_thing_unix import SignalThing
-        # from signal_thing_esp8266 import SignalThing
-        thing = SignalThing()
-        # from shade_controller import ShadeController
-        # thing = ShadeController()
+        if thing_type == 'Signal':
+            from sys import platform
+            if platform.startswith('esp'):
+                from signal_thing_esp8266 import SignalThing as Thing
+            else:
+                from signal_thing_unix import SignalThing as Thing
+        elif thing_type == 'Post':
+            from post_thing_esp8266 import PostThing as Thing
+        elif thing_type == 'Shade':
+            from shade_controller import ShadeController as Thing
+
+        thing = Thing()
+
         """ show_progress is an device specific feature.
             The device can blink an LED, print a statement or show a progress bar
             show_progress is called after: 
@@ -56,7 +64,12 @@ def main():
             break
         if 'show_progress' in dir(thing): thing.show_progress(3, 4)  # after getting time from NTP
 
-        time_tuple = utime.localtime(t_secs)
+        try:
+            time_tuple = utime.localtime(t_secs)
+        except:
+            thing.sleep(msg="Error: Exception on timestamp conversion; timestamp: {}".format(t_secs))
+            break
+
         datestamp = "{0}{1:02d}{2:02d}".format(time_tuple[0], time_tuple[1], time_tuple[2])
         time_now_utc = "{0:02d}{1:02d}{2:02d}".format(time_tuple[3], time_tuple[4], time_tuple[5])
         date_time = datestamp + "T" + time_now_utc + "Z"
@@ -110,6 +123,7 @@ def main():
             request_dict = awsiot_sign.request_gen(aws_info['endpt_prefix'], thing.id, aws_info['akey'],
                                                    aws_info['skey'], date_time, method='POST',
                                                    region=aws_info['region'], body=post_body_str)
+            # print("Before gc.collect.", )
             gc.collect()
             print("Free mem before POST: {0}".format(gc.mem_free()))
 

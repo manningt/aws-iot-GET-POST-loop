@@ -68,7 +68,7 @@ class SignalThing(BaseThing):
         self._current_state['params']['signal'] = self._shadow_state['state']['desired']['signal']
         from utime import sleep_ms
         for _ in range(self._current_state['params']['signal']):
-            print('\a')
+            print('beep\a')
             sleep_ms(300)
         return "done: signaled {} times".format(self._current_state['params']['signal'])
 

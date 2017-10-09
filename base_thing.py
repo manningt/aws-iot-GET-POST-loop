@@ -93,20 +93,14 @@ class BaseThing(object):
                     if desired_timestamp == cls._restored_state['history'][0]['timestamp']:
                         timestamp_changed = False
 
-                # print("(shadow_state_set): key: ", end='')
-                # print(key)
-                # print("(shadow_state_set): desired_unequal_current: ", end='')
-                # print(desired_unequal_current)
-                # print("(shadow_state_set): timestamp_changed: ", end='')
-                # print(timestamp_changed)
-                # print("(shadow_state_set): _current_state: ", end='')
-                # print(cls._current_state)
                 if desired_unequal_current and timestamp_changed:
                     cls._current_state['history'].insert(0, {'done': 0, \
                                         'op': key, \
                                         'value': shadow_state['state']['desired'][key], \
                                         'timestamp' : desired_timestamp})
+                    #print("Performing operation: {}".format(key))
                     cls._current_state['history'][0]['status'] = cls._operations[key]()
+                    print("Operation: {} status: {}".format(key, cls._current_state['history'][0]['status']))
                     cls._current_state['history'][0]['done'] = 1
                     history_updated = True
                     # dispatch only one parameter per update
