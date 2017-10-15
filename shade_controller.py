@@ -28,6 +28,7 @@ class ShadeController(BaseThing):
         # add tests to dictionary of available test operations
         self._test_operations['current'] = self._test_current_sensor
         self._test_operations['motor'] = self._test_motor
+        self._test_operations['motor2'] = self._test_motor2
         self._test_operations['set-position'] = self._set_position
 
         self.timestamp = None  # will hold number of seconds from the year 2000
@@ -50,11 +51,15 @@ class ShadeController(BaseThing):
         elif PCB_version == 3:
             self.PIN_LED = 16
             self.PIN_POWER_ENABLE = 16
-            self.PIN_MOTOR_ENABLE1 = 5
-            self.PIN_MOTOR_ENABLE2 = 17
+            # self.PIN_MOTOR_ENABLE1 = 5
+            # self.PIN_MOTOR_ENABLE2 = 17
+            self.PIN_MOTOR1_ENABLES = (5, 17)
+            self.PIN_MOTOR2_ENABLES = (18, 19)
             self.PIN_CHARGING_DISABLE = 21
             self.PIN_SCL = 22
             self.PIN_SDA = 23
+            self.LM75B_ADDR = 0x4F  # 79 decimal
+            self.ATECC508_ADDR = 0x60  # 96 decimal
         else:
             import sys
             print("Unknown PCB_rev".format(PCB_rev))
@@ -63,8 +68,6 @@ class ShadeController(BaseThing):
         self.I2C_FREQ = 100000
         # self.INA219_ADDR = 0x40 #64 on the adafruit module
         self.INA219_ADDR = 0x45 #69 decimal
-        self.LM75B_ADDR  = 0x4F #79 decimal
-        self.ATECC508_ADDR = 0x60 #96 decimal
 
         self.ppin_led = None
         self.ppin_power_enable = machine.Pin(self.PIN_POWER_ENABLE, machine.Pin.OUT, value=0)
@@ -244,6 +247,7 @@ class ShadeController(BaseThing):
             self._reported_state['batteryVoltage'] = self.current_sensor.get_bus_mv()
             self._reported_state['batteryCurrent'] = self.current_sensor.get_current_ma()
             self.current_sensor.stop()
+            self._reported_state['temperature'] = self._get_temperature()
 
         return super()._reported_state_get()
 
@@ -346,7 +350,7 @@ class ShadeController(BaseThing):
         if direction == self.RAISE:
             duration = duration + (duration >> 4) + (duration >> 5)
         
-        measured_duration = self._activate_motor(duration, direction)
+        measured_duration = self._activate_motor(duration, direction, PIN_MOTOR1_ENABLES)
         if measured_duration > 1:
             if direction == self.RAISE or measured_duration >= duration:
                 self._current_state['params']['position'] = self._shadow_state['state']['desired']['position']
@@ -380,6 +384,12 @@ class ShadeController(BaseThing):
         return status
 
     def _test_motor(self):
+        return self._test_motor_base(self.PIN_MOTOR1_ENABLES)
+
+    def _test_motor2(self):
+        return self._test_motor_base(self.PIN_MOTOR2_ENABLES)
+
+    def _test_motor_base(self, pins):
         """ Operates the motor for the number of milliseconds specified in test_param
             A negative test_param operates the motor in the reverse direction
             """
@@ -397,7 +407,7 @@ class ShadeController(BaseThing):
                     direction = self.RAISE
                 duration = abs(duration)
                 if duration < 55000:
-                    measured_duration = self._activate_motor(duration, direction)
+                    measured_duration = self._activate_motor(duration, direction, pins)
                     if measured_duration >= duration:
                         status = "Pass: motor on for " + str(measured_duration) + " msec."
                     else:
@@ -421,7 +431,7 @@ class ShadeController(BaseThing):
                     status = "I2C access to current sensor failed"
         return status
 
-    def _activate_motor(self, duration, direction):
+    def _activate_motor(self, duration, direction, pins):
         """Instantiates a motor and turns on the motor driver for the duration (expressed in milliseconds)
             """
         from motor import Motor
@@ -432,7 +442,8 @@ class ShadeController(BaseThing):
         
         #invert direction if reverse bit is set
         motor_direction = direction ^ (self._shadow_state['state']['desired']['reverse'] & 1)
-        self.motor = Motor(self.PIN_MOTOR_ENABLE1, self.PIN_MOTOR_ENABLE2)
+        # self.motor = Motor(self.PIN_MOTOR_ENABLE1, self.PIN_MOTOR_ENABLE2)
+        self.motor = Motor(pins)
 
         #enable 12V and disable charging
         if self.ppin_power_enable is None:
@@ -519,3 +530,26 @@ class ShadeController(BaseThing):
             print("Exception (get_cfg_info) filename: {}   Error: {}".format(filename, e_str))
             return None
 
+    def _get_temperature(self):
+        from utime import sleep_ms
+        cfg = self.i2c.readfrom(self.LM75B_ADDR, 1)
+        if not (cfg[0] & 0x01):
+            print("Temperature sensor not shutdown.")
+            self.i2c.writeto_mem(self.LM75B_ADDR, 1, b'\x00') # write cfg register to take out of shutdown state
+            sleep_ms(105) # wait for a conversion period
+        value = bytearray(2)
+        self.i2c.readfrom_mem_into(self.LM75B_ADDR, 0, value)
+        rounding = (value[1] & 0x80) >> 7 #if between 0.5 and 0.875 then round up or down
+        if (value[0] & 0x80):
+            # negative temp
+            t = value[0] - 0x100 - rounding
+        else:
+            t = value[0] + rounding
+        return t
+
+    def _get_pwr_in_voltage(self):
+        from machine import ADC, Pin
+        adc_35 = ADC(Pin(35))
+        adc_35.atten(ADC.ATTN_11DB)
+        DIVIDER_COEFF = 2.1  # why is this 2.1 instead of 2 ?
+        return DIVIDER_COEFF * adc_35.read() * 3.3 / 4096

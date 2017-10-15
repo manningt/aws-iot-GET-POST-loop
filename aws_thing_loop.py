@@ -67,7 +67,7 @@ def main(thing_type='Signal'):
         try:
             time_tuple = utime.localtime(t_secs)
         except:
-            thing.sleep(msg="Error: Exception on timestamp conversion; timestamp: {}".format(t_secs))
+            thing.sleep(msg="Error: Exception on timestamp conversion; timestamp: {:x}".format(t_secs))
             break
 
         datestamp = "{0}{1:02d}{2:02d}".format(time_tuple[0], time_tuple[1], time_tuple[2])
