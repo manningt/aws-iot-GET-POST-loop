@@ -237,7 +237,7 @@ class ShadeController(BaseThing):
                         'batteryVoltage' in self._shadow_state['metadata']['reported']:
             bv_ts = self._shadow_state['metadata']['reported']['batteryVoltage']['timestamp']
             delta_ts = self.timestamp + 946684800 - bv_ts
-            # print("metadata_ts: {0}  -- ntp_ts: {1} -- delta: {2}".format(bv_ts, timestamp, delta_ts))
+            # print("metadata_ts: {0}  -- ntp_ts: {1} -- delta: {2}".format(bv_ts, self.timestamp, delta_ts))
             if delta_ts > TIME_BASED_SAMPLE_INTERVAL:
                 report_conditions_time_based = True
         else:
@@ -253,40 +253,16 @@ class ShadeController(BaseThing):
                    CONDITION_NAMES[1] : self.current_sensor.get_current_ma(), \
                    CONDITION_NAMES[2] : self.get_temperature()}
         self.current_sensor.stop()
-        # battery_current = self.current_sensor.get_current_ma()
-        # battery_voltage = self.current_sensor.get_bus_mv()
-        # temperature = self.get_temperature()
 
         for condition in CONDITION_NAMES:
-            if 'reported' in self._shadow_state and condition in self._shadow_state['reported']:
-                print("Previous {0}: {1}    Current {0}: {2}".format(condition, self._shadow_state['reported'][condition],
-                                                                     current[condition]))
-                delta = self._shadow_state['reported'][condition] - current[condition]
+            if 'reported' in self._shadow_state['state'] and condition in self._shadow_state['state']['reported']:
+                # print("Previous {0}: {1}    Current {0}: {2}".format(condition, \
+                #                                                      self._shadow_state['state']['reported'][condition],
+                #                                                      current[condition]))
+                delta = self._shadow_state['state']['reported'][condition] - current[condition]
                 if (abs(delta) > CONDITION_THRESHOLDS[condition]) or report_conditions_time_based:
                     self._reported_state[condition] = current[condition]
 
-        # if 'reported' in self._shadow_state and 'batteryCurrent' in self._shadow_state['reported']:
-        #     print("Battery current previous: {}   now: {}".format(self._shadow_state['reported']['batteryCurrent'], battery_current))
-        #     delta_battery_current = self._shadow_state['reported']['batteryCurrent'] - battery_current
-        #     if abs(delta_battery_current) > DELTA_BATTERY_CURRENT_REPORT:
-        #         self._reported_state['batteryCurrent'] = battery_current
-        #
-        # if 'reported' in self._shadow_state and 'batteryVoltage' in self._shadow_state['reported']:
-        #     print("Battery current previous: {}   now: {}".format(self._shadow_state['reported']['batteryVoltage'], battery_voltage))
-        #     delta_battery_current = self._shadow_state['reported']['batteryCurrent'] - battery_voltage
-        #     if abs(delta_battery_current) > DELTA_BATTERY_CURRENT_REPORT:
-        #         self._reported_state['batteryCurrent'] = battery_voltage
-        #
-        # if 'reported' in self._shadow_state and 'temperature' in self._shadow_state['reported']:
-        #     print("Temperature previous: {}   now: {}".format(self._shadow_state['reported']['temperature'], temperature))
-        #     delta_battery_current = self._shadow_state['reported']['temperature'] - temperature
-        #     if abs(delta_temperature) > DELTA_TEMPERATURE_REPORT:
-        #         self._reported_state['temperature'] = temperature
-        #
-        # if report_conditions_time_based:
-        #     self._reported_state['batteryVoltage'] = battery_voltage
-        #     self._reported_state['batteryCurrent'] = battery_current
-        #     self._reported_state['temperature'] = temperature
         return super()._reported_state_get()
 
     reported_state = property(_reported_state_get)
