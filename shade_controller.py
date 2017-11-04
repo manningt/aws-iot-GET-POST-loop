@@ -83,7 +83,6 @@ class ShadeController(BaseThing):
         #     print("No i2c devices detected")
         self.current_sensor = None
 
-        self.BATTERY_SAMPLE_INTERVAL = 1200  #report the battery state every 20 minutes
         # the following are shade direction constants that make it easier to understand motor direction
         self.LOWER = 0
         self.RAISE = 1
@@ -121,7 +120,7 @@ class ShadeController(BaseThing):
         wlan.active(True)
         if platform == 'esp32':
             cfg_info = self._get_cfg_info("wifi_info.txt")
-            # cfg_info = {"SSID": "BayberryLedge", "password": "40Edgemoor"}
+            # cfg_info = {"SSID": "xx", "password": "yy"}
             if not cfg_info:
                 setwifi()
             # setwifi should write the wifi_info file, so read it
@@ -207,8 +206,12 @@ class ShadeController(BaseThing):
 
     # @property
     def _reported_state_get(self):
+        TIME_BASED_SAMPLE_INTERVAL = 1200  #report operating state unconditionally every 20 minutes
+
+        report_conditions_time_based = False
         # add current arrays as strings to report
         if self.starting_currents[0] != 0:
+            report_conditions_time_based = True  #update conditions report after operating the motor
             currents = ""
             for i in self.starting_currents:
                 currents = currents + str(i)+ " "
@@ -229,26 +232,61 @@ class ShadeController(BaseThing):
             compares the shadow metadata timestamp with the NTP time to determine if an update should occur
             The shadow timestamp is from 1970-01-01 whereas micropython is 2000-01-01, so subtract 946684800 in the comparison
             """
-        do_update = False
         if 'metadata' in self._shadow_state and \
                         'reported' in self._shadow_state['metadata'] and \
                         'batteryVoltage' in self._shadow_state['metadata']['reported']:
             bv_ts = self._shadow_state['metadata']['reported']['batteryVoltage']['timestamp']
             delta_ts = self.timestamp + 946684800 - bv_ts
             # print("metadata_ts: {0}  -- ntp_ts: {1} -- delta: {2}".format(bv_ts, timestamp, delta_ts))
-            if delta_ts > self.BATTERY_SAMPLE_INTERVAL:
-                do_update = True
+            if delta_ts > TIME_BASED_SAMPLE_INTERVAL:
+                report_conditions_time_based = True
         else:
-            do_update = True
+            report_conditions_time_based = True
 
-        if do_update:
-            self._instance_current_sensor()
-            self.current_sensor.start()
-            self._reported_state['batteryVoltage'] = self.current_sensor.get_bus_mv()
-            self._reported_state['batteryCurrent'] = self.current_sensor.get_current_ma()
-            self.current_sensor.stop()
-            self._reported_state['temperature'] = self._get_temperature()
+        self._instance_current_sensor()
+        self.current_sensor.start()
+        CONDITION_NAMES = ['batteryVoltage', 'batteryCurrent', 'temperature']
+        CONDITION_THRESHOLDS = {CONDITION_NAMES[0] : 100, \
+                                CONDITION_NAMES[1] : 20, \
+                                CONDITION_NAMES[2] : 2 }
+        current = {CONDITION_NAMES[0] : self.current_sensor.get_bus_mv(), \
+                   CONDITION_NAMES[1] : self.current_sensor.get_current_ma(), \
+                   CONDITION_NAMES[2] : self.get_temperature()}
+        self.current_sensor.stop()
+        # battery_current = self.current_sensor.get_current_ma()
+        # battery_voltage = self.current_sensor.get_bus_mv()
+        # temperature = self.get_temperature()
 
+        for condition in CONDITION_NAMES:
+            if 'reported' in self._shadow_state and condition in self._shadow_state['reported']:
+                print("Previous {0}: {1}    Current {0}: {2}".format(condition, self._shadow_state['reported'][condition],
+                                                                     current[condition]))
+                delta = self._shadow_state['reported'][condition] - current[condition]
+                if (abs(delta) > CONDITION_THRESHOLDS[condition]) or report_conditions_time_based:
+                    self._reported_state[condition] = current[condition]
+
+        # if 'reported' in self._shadow_state and 'batteryCurrent' in self._shadow_state['reported']:
+        #     print("Battery current previous: {}   now: {}".format(self._shadow_state['reported']['batteryCurrent'], battery_current))
+        #     delta_battery_current = self._shadow_state['reported']['batteryCurrent'] - battery_current
+        #     if abs(delta_battery_current) > DELTA_BATTERY_CURRENT_REPORT:
+        #         self._reported_state['batteryCurrent'] = battery_current
+        #
+        # if 'reported' in self._shadow_state and 'batteryVoltage' in self._shadow_state['reported']:
+        #     print("Battery current previous: {}   now: {}".format(self._shadow_state['reported']['batteryVoltage'], battery_voltage))
+        #     delta_battery_current = self._shadow_state['reported']['batteryCurrent'] - battery_voltage
+        #     if abs(delta_battery_current) > DELTA_BATTERY_CURRENT_REPORT:
+        #         self._reported_state['batteryCurrent'] = battery_voltage
+        #
+        # if 'reported' in self._shadow_state and 'temperature' in self._shadow_state['reported']:
+        #     print("Temperature previous: {}   now: {}".format(self._shadow_state['reported']['temperature'], temperature))
+        #     delta_battery_current = self._shadow_state['reported']['temperature'] - temperature
+        #     if abs(delta_temperature) > DELTA_TEMPERATURE_REPORT:
+        #         self._reported_state['temperature'] = temperature
+        #
+        # if report_conditions_time_based:
+        #     self._reported_state['batteryVoltage'] = battery_voltage
+        #     self._reported_state['batteryCurrent'] = battery_current
+        #     self._reported_state['temperature'] = temperature
         return super()._reported_state_get()
 
     reported_state = property(_reported_state_get)
@@ -346,11 +384,11 @@ class ShadeController(BaseThing):
         if self._current_state['params']['position'] not in POSITIONS and direction == self.LOWER:
             duration = 200;
 
-        # it takes longer to go the same distance when raising, so increase the duration by about 10%
+        # it takes longer to go the same distance when raising, so increase the duration by ??30%
         if direction == self.RAISE:
-            duration = duration + (duration >> 4) + (duration >> 5)
+            duration = duration + (duration >> 2) # + (duration >> 4)
         
-        measured_duration = self._activate_motor(duration, direction, PIN_MOTOR1_ENABLES)
+        measured_duration = self._activate_motor(duration, direction, self.PIN_MOTOR1_ENABLES)
         if measured_duration > 1:
             if direction == self.RAISE or measured_duration >= duration:
                 self._current_state['params']['position'] = self._shadow_state['state']['desired']['position']
@@ -518,19 +556,7 @@ class ShadeController(BaseThing):
             self.stopping_current_next = 0
         return current_sample
 
-    def _get_cfg_info(self, filename):
-        # TODO: get the info from a secure store instead of the flash filesystem
-        import ujson
-        try:
-            with open(filename) as f:
-                cfg_info = ujson.load(f)
-            return cfg_info
-        except OSError as e:
-            e_str = str(e)
-            print("Exception (get_cfg_info) filename: {}   Error: {}".format(filename, e_str))
-            return None
-
-    def _get_temperature(self):
+    def get_temperature(self):
         from utime import sleep_ms
         cfg = self.i2c.readfrom(self.LM75B_ADDR, 1)
         if not (cfg[0] & 0x01):
@@ -545,9 +571,10 @@ class ShadeController(BaseThing):
             t = value[0] - 0x100 - rounding
         else:
             t = value[0] + rounding
+        self.i2c.writeto_mem(self.LM75B_ADDR, 1, b'\x01')  # write cfg register to put into shutdown state
         return t
 
-    def _get_pwr_in_voltage(self):
+    def get_pwr_in_voltage(self):
         from machine import ADC, Pin
         adc_35 = ADC(Pin(35))
         adc_35.atten(ADC.ATTN_11DB)

@@ -158,6 +158,16 @@ class BaseThing(object):
         print(" ... Going to sleep for {0} seconds.".format(cls._current_state['params']['sleep']))
         sleep(cls._current_state['params']['sleep'])
 
+    def get_aws_iot_cfg(cls):
+        """ This method can be overridden by a child class to retrieve from a device specific persistent store.
+        """
+        return cls._get_cfg_info("aws_iot_cfg.txt")
+
+    def get_aws_credentials(cls):
+        """ This method SHOULD be overridden by a child class to retrieve from a SECURE persistent store.
+        """
+        return cls._get_cfg_info("aws_credentials.txt")
+
     def _restore_state(cls):
         """ This method must be overridden by a child class to write to device specific persistent storage
         """
@@ -188,3 +198,14 @@ class BaseThing(object):
         """ a dummy test, but it can be used to verify tests are being dispatched
             """
         return "pass: test 'none'"
+
+    def _get_cfg_info(cls, filename):
+        import ujson
+        try:
+            with open(filename) as f:
+                cfg_info = ujson.load(f)
+            return cfg_info
+        except OSError as e:
+            e_str = str(e)
+            print("Exception (get_cfg_info) filename: {}   Error: {}".format(filename, e_str))
+            return None

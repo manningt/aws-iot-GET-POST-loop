@@ -75,13 +75,17 @@ def main(thing_type='Signal'):
         date_time = datestamp + "T" + time_now_utc + "Z"
         start_ticks = utime.ticks_ms()
 
-        aws_info = get_cfg_info("aws_info.txt")
-        if not aws_info:
+        aws_iot_cfg = thing.get_aws_iot_cfg()
+        if not aws_iot_cfg:
             thing.sleep(msg="Error: unable to obtain AWS IOT access parameters")
             break
+        aws_credentials = thing.get_aws_credentials()
+        if not aws_iot_cfg:
+            thing.sleep(msg="Error: unable to obtain AWS credentials")
+            break
 
-        request_dict = awsiot_sign.request_gen(aws_info['endpt_prefix'], thing.id, \
-                                               aws_info['akey'], aws_info['skey'], date_time, region=aws_info['region'])
+        request_dict = awsiot_sign.request_gen(aws_iot_cfg['endpt_prefix'], thing.id, \
+                                               aws_credentials['akey'], aws_credentials['skey'], date_time, region=aws_iot_cfg['region'])
         endpoint = 'https://' + request_dict["host"] + request_dict["uri"]
 
         try:
@@ -105,8 +109,7 @@ def main(thing_type='Signal'):
             thing.sleep(msg=exception_msg)
             break
 
-        # need to close first request before making second request
-        r.close()
+        r.close()  # need to close first request before making second request
         if len(thing.reported_state) > 0:
             post_body = {'state': {'reported': {}}}
             for key, value in thing.reported_state.items():
@@ -120,10 +123,9 @@ def main(thing_type='Signal'):
             time_now_utc = "{0:02d}{1:02d}{2:02d}".format(time_tuple[3], time_tuple[4], time_tuple[5])
             date_time = datestamp + "T" + time_now_utc + "Z"
 
-            request_dict = awsiot_sign.request_gen(aws_info['endpt_prefix'], thing.id, aws_info['akey'],
-                                                   aws_info['skey'], date_time, method='POST',
-                                                   region=aws_info['region'], body=post_body_str)
-            # print("Before gc.collect.", )
+            request_dict = awsiot_sign.request_gen(aws_iot_cfg['endpt_prefix'], thing.id, aws_credentials['akey'],
+                                                   aws_credentials['skey'], date_time, method='POST',
+                                                   region=aws_iot_cfg['region'], body=post_body_str)
             gc.collect()
             print("Free mem before POST: {0}".format(gc.mem_free()))
 
@@ -146,16 +148,3 @@ def main(thing_type='Signal'):
         elapsed_msecs = utime.ticks_diff(utime.ticks_ms(), start_ticks)
         print("Main took: {0} msec. ---  Free mem before exit: {1}".format(elapsed_msecs, gc.mem_free()))
         thing.sleep()
-
-
-def get_cfg_info(filename):
-    # TODO: get the keys from a secure store instead of the flash filesystem
-    import ujson
-    try:
-        with open(filename) as f:
-            cfg_info = ujson.load(f)
-        return cfg_info
-    except OSError as e:
-        e_str = str(e)
-        print("Exception (get_cfg_info) filename: {}   Error: {}".format(filename, e_str))
-        return None
