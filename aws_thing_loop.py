@@ -110,9 +110,10 @@ def main(thing_type='Signal'):
             break
 
         r.close()  # need to close first request before making second request
-        if len(thing.reported_state) > 0:
+        reported_state = thing.reported_state
+        if len(reported_state) > 0:
             post_body = {'state': {'reported': {}}}
-            for key, value in thing.reported_state.items():
+            for key, value in reported_state.items():
                 post_body['state']['reported'][key] = value
             post_body_str = ujson.dumps(post_body)
             #        print("posting: " + post_body_str)
