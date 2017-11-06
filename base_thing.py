@@ -20,6 +20,12 @@ class BaseThing(object):
         cls._operations = {'test': cls._dispatch_test, 'test_param': cls._dispatch_test}
         cls._test_operations = {'none' : cls._test_none}
 
+        # the following dictionary are identify functions to measure conditions
+        # functions can be added by the child class __init__ function for device specific operations
+        # The following example reports free memory if it changes by 2K or every hour, which ever comes first
+        #    self._conditions['freeMemory'] = {'get': self.get_mem_free, 'threshold' : 2048, 'interval': 3600}
+        cls._conditions = {}
+
         cls._shadow_state = {}  # holds the shadow state obtained from AWS-IOT; read (not modified) by the controller
         cls._reported_state = {}  # holds the state to be posted to the shadow; written by the controller
 
@@ -36,6 +42,7 @@ class BaseThing(object):
             for key in cls._restored_state['params']:
                 cls._current_state['params'][key] = cls._restored_state['params'][key]
         cls._has_history = 'history' in cls._restored_state and len(cls._restored_state['history']) > 0
+        cls._timestamp = None
 
     # @property
     def _reported_state_get(cls):
@@ -43,6 +50,39 @@ class BaseThing(object):
             This method can be overridden by a child class to report additional device specific state
             super()._reported_state_get should be called by the child class to return the base_class reported state
         """
+        #add conditions to the reported state
+        # call the condition[get] function as few times as possible, since it consumes time/power
+        for condition in cls._conditions:
+            if 'get' in cls._conditions[condition]:
+                # print("\nTesting condition: {}".format(condition), end='')
+                if 'reported' in cls._shadow_state['state'] and condition in cls._shadow_state['state']['reported']:
+                    if 'threshold' in cls._conditions[condition]:
+                        current_value = cls._conditions[condition]['get']()
+                        delta = cls._shadow_state['state']['reported'][condition] - current_value
+                        # print("  threshold: {}  delta: {}".format(cls._conditions[condition]['threshold'], delta), end='')
+                        if (abs(delta) > cls._conditions[condition]['threshold']):
+                            cls._reported_state[condition] = current_value
+                            # print("\nUpdating {} due to threshold {}; delta: {}".format(condition, \
+                                                                    cls._conditions[condition]['threshold'], delta))
+                    if not condition in cls._reported_state and \
+                            'interval' in cls._conditions[condition] and \
+                            'metadata' in cls._shadow_state:
+                        # print("  interval: {}".format(cls._conditions[condition]['interval']), end='')
+                        if cls._timestamp is not None:
+                            previous_report_timestamp = cls._shadow_state['metadata']['reported'][condition]['timestamp']
+                            delta_time = cls._timestamp - previous_report_timestamp
+                            # print("\n\t\tmetadata_ts: {}  -- class_ts: {} -- delta: {}".format(previous_report_timestamp, \
+                            #                                                                    cls._timestamp, delta_time))
+                            if delta_time > cls._conditions[condition]['interval']:
+                                # print("\nUpdating {} due to interval {}; delta_time: {}".format(condition, cls._conditions[condition]['interval'], delta_time))
+                                cls._reported_state[condition] = cls._conditions[condition]['get']()
+                        else:
+                            print("WARNING: no cls._timestamp when evaluating condition interval")
+                else:
+                    cls._reported_state[condition] = cls._conditions[condition]['get']()
+            else:
+                print("WARNING: no get function for condition {}". format(condition))
+
         return cls._reported_state
 
     reported_state = property(_reported_state_get)

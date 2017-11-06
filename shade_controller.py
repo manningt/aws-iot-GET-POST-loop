@@ -31,7 +31,9 @@ class ShadeController(BaseThing):
         self._test_operations['motor2'] = self._test_motor2
         self._test_operations['set-position'] = self._set_position
 
-        self.timestamp = None  # will hold number of seconds from the year 2000
+        self._conditions['temperature'] = {'get' : self.get_temperature, 'threshold' : 2} # report on 2 degree changes
+        # report batteryVoltage on changes of 200 mV or 20 minutes
+        self._conditions['batteryVoltage'] = {'get': self.get_battery_voltage, 'threshold' : 200, 'interval': 1200}
 
         PCB_version = 3
         if PCB_version == 0:
@@ -154,11 +156,22 @@ class ShadeController(BaseThing):
         for _ in range(5):
             sleep_ms(3000)
             try:
-                self.timestamp = get_ntp_time()
+                self._timestamp = get_ntp_time()
                 break
             except Exception as e:
                 print("Exception in get NTP: {}".format(str(e)))
-        return self.timestamp
+        ts = self._timestamp
+        if ts is None:
+            print("Error: failed to get time from NTP")
+        elif type(self._timestamp).__name__=='int':
+            print("NTP time: {}".format(self._timestamp))
+            # The shadow timestamp is from 1970-01-01 vs micropython is from 2000-01-01, so adjust the stored timestamp
+            # that will be used for reporting conditions based on an interval
+            self._timestamp += 946684800
+        else:
+            print("NTP timestamp not an int: {}".format(self._timestamp))
+            ts = None
+        return ts
 
     def sleep(self,msg=None):
         import machine
@@ -174,6 +187,9 @@ class ShadeController(BaseThing):
             print(msg)
             with open(LOG_FILENAME, 'a') as log_file:
                 log_file.write(msg + "\n")
+
+        if self.current_sensor is not None:
+            self.current_sensor.stop()
 
         if self._current_state['params']['sleep'] < 1:
             # exit: stop the infinite loop of main & deep-sleep
@@ -206,9 +222,6 @@ class ShadeController(BaseThing):
 
     # @property
     def _reported_state_get(self):
-        TIME_BASED_SAMPLE_INTERVAL = 1200  #report operating state unconditionally every 20 minutes
-
-        report_conditions_time_based = False
         # add current arrays as strings to report
         if self.starting_currents[0] != 0:
             report_conditions_time_based = True  #update conditions report after operating the motor
@@ -227,45 +240,10 @@ class ShadeController(BaseThing):
                 if idx > (self.STOPPING_CURRENT_SAMPLE_COUNT - 1):
                     idx = 0
             self._reported_state['stopping_currents'] = currents[:-1]
-
-        """Add battery voltage, current to report dictionary to be sent to AWS-IOT.
-            compares the shadow metadata timestamp with the NTP time to determine if an update should occur
-            The shadow timestamp is from 1970-01-01 whereas micropython is 2000-01-01, so subtract 946684800 in the comparison
-            """
-        if 'metadata' in self._shadow_state and \
-                        'reported' in self._shadow_state['metadata'] and \
-                        'batteryVoltage' in self._shadow_state['metadata']['reported']:
-            bv_ts = self._shadow_state['metadata']['reported']['batteryVoltage']['timestamp']
-            delta_ts = self.timestamp + 946684800 - bv_ts
-            # print("metadata_ts: {0}  -- ntp_ts: {1} -- delta: {2}".format(bv_ts, self.timestamp, delta_ts))
-            if delta_ts > TIME_BASED_SAMPLE_INTERVAL:
-                report_conditions_time_based = True
-        else:
-            report_conditions_time_based = True
-
-        self._instance_current_sensor()
-        self.current_sensor.start()
-        CONDITION_NAMES = ['batteryVoltage', 'batteryCurrent', 'temperature']
-        CONDITION_THRESHOLDS = {CONDITION_NAMES[0] : 100, \
-                                CONDITION_NAMES[1] : 20, \
-                                CONDITION_NAMES[2] : 2 }
-        current = {CONDITION_NAMES[0] : self.current_sensor.get_bus_mv(), \
-                   CONDITION_NAMES[1] : self.current_sensor.get_current_ma(), \
-                   CONDITION_NAMES[2] : self.get_temperature()}
-        self.current_sensor.stop()
-
-        for condition in CONDITION_NAMES:
-            if 'reported' in self._shadow_state['state'] and condition in self._shadow_state['state']['reported']:
-                # print("Previous {0}: {1}    Current {0}: {2}".format(condition, \
-                #                                                      self._shadow_state['state']['reported'][condition],
-                #                                                      current[condition]))
-                delta = self._shadow_state['state']['reported'][condition] - current[condition]
-                if (abs(delta) > CONDITION_THRESHOLDS[condition]) or report_conditions_time_based:
-                    self._reported_state[condition] = current[condition]
-
         return super()._reported_state_get()
 
     reported_state = property(_reported_state_get)
+
 
     # @property
     def _shadow_state_get(self):
@@ -394,7 +372,6 @@ class ShadeController(BaseThing):
             mAmps = self.current_sensor.get_current_ma()
             mVolts = self.current_sensor.get_bus_mv()
             status = "Pass: Current: {0:d}  BusVolts: {1:d}".format(mAmps,mVolts)
-            self.current_sensor.stop()
         return status
 
     def _test_motor(self):
@@ -440,13 +417,13 @@ class ShadeController(BaseThing):
                     self.current_sensor = INA219(i2c=self.i2c, i2c_addr=self.INA219_ADDR)
                     if not self.current_sensor.in_standby_when_initialized:
                         print("Current sensor not in standby.")
-                        self.current_sensor.stop()
                 except:
                     status = "I2C access to current sensor failed"
         return status
 
     def _activate_motor(self, duration, direction, pins):
         """Instantiates a motor and turns on the motor driver for the duration (expressed in milliseconds)
+           self.current_sensor should have been instantiated before calling
             """
         from motor import Motor
         import machine, utime
@@ -508,7 +485,6 @@ class ShadeController(BaseThing):
         self.ppin_charging_disable.init(machine.Pin.IN)
         self.motor.deinit()
         del self.motor
-        self.current_sensor.stop()
         return elapsed_time
 
     def _update_current_arrays(self):
@@ -531,6 +507,14 @@ class ShadeController(BaseThing):
         if (self.stopping_current_next > self.STOPPING_CURRENT_SAMPLE_COUNT-1):
             self.stopping_current_next = 0
         return current_sample
+
+    def get_battery_voltage(self):
+        mVolts = -1
+        status = self._instance_current_sensor()
+        if status is None:
+            self.current_sensor.start()
+            mVolts = self.current_sensor.get_bus_mv()
+        return mVolts
 
     def get_temperature(self):
         from utime import sleep_ms

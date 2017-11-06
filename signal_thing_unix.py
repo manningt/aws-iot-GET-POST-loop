@@ -12,6 +12,8 @@ class SignalThing(BaseThing):
         # add signal operations to the base class
         self._operations['signal'] = self._signal
         self._test_operations['child'] = self._test_child
+        self._conditions['freeMemory'] = {'get': self.get_mem_free, 'threshold' : 1024, 'interval': 6000}
+        self._conditions['platform'] = {'get': self.get_platform, 'interval': 120}
 
     @property
     def id(self):
@@ -26,11 +28,14 @@ class SignalThing(BaseThing):
 
     def time(self):
         """ returns a GMT timestamp to be used when generating the AWS request """
-        import time
-        t = time.gmtime()
-        # had to make 'isdst' unknown to get a GMT timestamp
-        tc = (t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], -1)
-        return time.mktime(tc)
+        from time import  gmtime, mktime, localtime
+        ttuple = gmtime()
+        ts = mktime(ttuple)
+        # the stored timestamp has to be adjusted by the TZ for the condition interval comparison
+        ttuple_local = localtime()
+        print("\t\t\tttuple hour: {}  <> ttuple_local: {}".format(ttuple[3], ttuple_local[3]))
+        self._timestamp = ts + (3600 * (ttuple_local[3]-ttuple[3]))
+        return ts
 
     def _restore_state(cls):
         """ Restores _current_state from a file.
@@ -75,6 +80,14 @@ class SignalThing(BaseThing):
     def _test_child(self):
         # a dummy test just to demonstrate the addition of device/child specific tests
         return "pass: test 'child'"
+
+    def get_mem_free(self):
+        from gc import mem_free
+        return mem_free()
+
+    def get_platform(self):
+        from sys import platform
+        return platform
 
     # Uncomment the following if extending the shadow_state getter/setter:
     # def _shadow_state_get(self):
