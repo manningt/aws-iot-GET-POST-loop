@@ -28,14 +28,14 @@ class SignalThing(BaseThing):
 
     def time(self):
         """ returns a GMT timestamp to be used when generating the AWS request """
-        from time import  gmtime, mktime, localtime
+        from time import gmtime, mktime, localtime
         ttuple = gmtime()
-        ts = mktime(ttuple)
-        # the stored timestamp has to be adjusted by the TZ for the condition interval comparison
-        ttuple_local = localtime()
-        print("\t\t\tttuple hour: {}  <> ttuple_local: {}".format(ttuple[3], ttuple_local[3]))
-        self._timestamp = ts + (3600 * (ttuple_local[3]-ttuple[3]))
-        return ts
+        if self._timestamp is None:
+            # the stored timestamp has to be adjusted by the TZ for the condition interval comparison
+            ttuple_local = localtime()
+            # print("\t\t\tttuple hour: {}  <> ttuple_local: {}".format(ttuple[3], ttuple_local[3]))
+            self._timestamp = mktime(ttuple) + (3600 * (ttuple_local[3]-ttuple[3]))
+        return ttuple
 
     def _restore_state(cls):
         """ Restores _current_state from a file.

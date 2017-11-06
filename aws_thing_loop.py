@@ -42,6 +42,7 @@ def main(thing_type='Signal'):
         elif thing_type == 'Shade':
             from shade_controller import ShadeController as Thing
 
+        start_ticks = utime.ticks_ms()
         thing = Thing()
 
         """ show_progress is an device specific feature.
@@ -58,22 +59,15 @@ def main(thing_type='Signal'):
 
         if 'show_progress' in dir(thing): thing.show_progress(2, 4)  # after connected to WiFi
 
-        t_secs = thing.time() # seconds from year 2000; different things obtain the time in different ways
-        if t_secs is None:
+        time_tuple = thing.time() # different things obtain the time in different ways; needs to be GMT
+        if time_tuple is None:
             thing.sleep(msg="Error: failed to get current time")
             break
         if 'show_progress' in dir(thing): thing.show_progress(3, 4)  # after getting time from NTP
 
-        try:
-            time_tuple = utime.localtime(t_secs)
-        except:
-            thing.sleep(msg="Error: Exception on timestamp conversion; timestamp: {:x}".format(t_secs))
-            break
-
         datestamp = "{0}{1:02d}{2:02d}".format(time_tuple[0], time_tuple[1], time_tuple[2])
         time_now_utc = "{0:02d}{1:02d}{2:02d}".format(time_tuple[3], time_tuple[4], time_tuple[5])
         date_time = datestamp + "T" + time_now_utc + "Z"
-        start_ticks = utime.ticks_ms()
 
         aws_iot_cfg = thing.get_aws_iot_cfg()
         if not aws_iot_cfg:
@@ -118,9 +112,9 @@ def main(thing_type='Signal'):
             post_body_str = ujson.dumps(post_body)
             #        print("posting: " + post_body_str)
 
-            # == update the timestamp (shift right 10 is approx equal to divide by 1000
-            elapsed_secs = utime.ticks_diff(utime.ticks_ms(), start_ticks) >> 10
-            time_tuple = utime.localtime(t_secs + elapsed_secs)
+            # == make an updated timestamp
+            time_tuple = thing.time()
+            datestamp = "{0}{1:02d}{2:02d}".format(time_tuple[0], time_tuple[1], time_tuple[2])
             time_now_utc = "{0:02d}{1:02d}{2:02d}".format(time_tuple[3], time_tuple[4], time_tuple[5])
             date_time = datestamp + "T" + time_now_utc + "Z"
 

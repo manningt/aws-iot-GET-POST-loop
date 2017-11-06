@@ -63,7 +63,7 @@ class BaseThing(object):
                         if (abs(delta) > cls._conditions[condition]['threshold']):
                             cls._reported_state[condition] = current_value
                             # print("\nUpdating {} due to threshold {}; delta: {}".format(condition, \
-                                                                    cls._conditions[condition]['threshold'], delta))
+                            #                                         cls._conditions[condition]['threshold'], delta))
                     if not condition in cls._reported_state and \
                             'interval' in cls._conditions[condition] and \
                             'metadata' in cls._shadow_state:
@@ -74,7 +74,8 @@ class BaseThing(object):
                             # print("\n\t\tmetadata_ts: {}  -- class_ts: {} -- delta: {}".format(previous_report_timestamp, \
                             #                                                                    cls._timestamp, delta_time))
                             if delta_time > cls._conditions[condition]['interval']:
-                                # print("\nUpdating {} due to interval {}; delta_time: {}".format(condition, cls._conditions[condition]['interval'], delta_time))
+                                # print("\nUpdating {} due to interval {}; delta_time: {}".format(condition, \
+                                #  cls._conditions[condition]['interval'], delta_time))
                                 cls._reported_state[condition] = cls._conditions[condition]['get']()
                         else:
                             print("WARNING: no cls._timestamp when evaluating condition interval")

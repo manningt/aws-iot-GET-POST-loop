@@ -35,6 +35,8 @@ class ShadeController(BaseThing):
         # report batteryVoltage on changes of 200 mV or 20 minutes
         self._conditions['batteryVoltage'] = {'get': self.get_battery_voltage, 'threshold' : 200, 'interval': 1200}
 
+        self._start_ticks = None
+
         PCB_version = 3
         if PCB_version == 0:
             # the following are the GPIO numbers
@@ -152,26 +154,38 @@ class ShadeController(BaseThing):
 
     def time(self):
         from get_ntp_time import get_ntp_time
-        from utime import sleep_ms
-        for _ in range(5):
-            sleep_ms(3000)
-            try:
-                self._timestamp = get_ntp_time()
-                break
-            except Exception as e:
-                print("Exception in get NTP: {}".format(str(e)))
-        ts = self._timestamp
-        if ts is None:
-            print("Error: failed to get time from NTP")
-        elif type(self._timestamp).__name__=='int':
-            print("NTP time: {}".format(self._timestamp))
-            # The shadow timestamp is from 1970-01-01 vs micropython is from 2000-01-01, so adjust the stored timestamp
-            # that will be used for reporting conditions based on an interval
-            self._timestamp += 946684800
+        import utime
+
+        # The shadow timestamp is from 1970-01-01 vs micropython is from 2000-01-01
+        SECONDS_BETWEEN_1970_2000 = 946684800
+        time_tuple = None
+        if self._start_ticks is None:
+            for _ in range(5):
+                utime.sleep_ms(3000)
+                try:
+                    self._timestamp = get_ntp_time()
+                    break
+                except Exception as e:
+                    print("Exception in get NTP: {}".format(str(e)))
+
+            if self._timestamp is None:
+                print("Error: failed to get time from NTP")
+            elif type(self._timestamp).__name__=='int':
+                try:
+                    time_tuple = utime.localtime(self._timestamp)
+                    # adjust the stored timestamp used for reporting conditions based on an interval
+                    self._start_ticks = utime.ticks_ms()
+                    self._timestamp += SECONDS_BETWEEN_1970_2000
+                except:
+                    print("Error: Exception on timestamp conversion; timestamp: {}".format(self._timestamp))
+            else:
+                print("NTP timestamp not an int: {}".format(self._timestamp))
         else:
-            print("NTP timestamp not an int: {}".format(self._timestamp))
-            ts = None
-        return ts
+            # get updated time by adding elapsed time to existing timestamp
+            #     - shift right 10 is approx equal to divide by 1000 in order to get seconds
+            elapsed_secs = utime.ticks_diff(utime.ticks_ms(), self._start_ticks) >> 10
+            time_tuple = utime.localtime(self._timestamp - SECONDS_BETWEEN_1970_2000 + elapsed_secs)
+        return time_tuple
 
     def sleep(self,msg=None):
         import machine
