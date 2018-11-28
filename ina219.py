@@ -29,8 +29,19 @@ class INA219(object):
             Vshunt = -((~value[0]<<8) + 65536 + ~value[1] + 256) #-1 <- may be off by one, but since returning mA, it doesn't matter
         else:
             Vshunt = (value[0]<<8) + value[1]
+        # The LSB of Vshunt is 10 microVolts   V/R = current.  V*100 gives microVolts.  V/Rshunt gives milliAmps
         Ishunt = (Vshunt * 205) >> 11   #multiply by Rshunt (0.1 ohms).  Done by ultiplying by 205 and shifting
         return Ishunt
+
+    def get_vshunt_mv(self):
+        value = bytearray(2)
+        self.i2c.readfrom_mem_into(self.i2c_addr, self._INA219_REG_SHUNTVOLTAGE , value)
+        if ((value[0] & 0x80) > 0):
+            # negative number, so sign extend
+            Vshunt = -((~value[0]<<8) + 65536 + ~value[1] + 256) #-1 <- may be off by one, but since returning mA, it doesn't matter
+        else:
+            Vshunt = (value[0]<<8) + value[1]
+        return Vshunt
 
     def get_bus_mv(self):
         value = bytearray(2)
