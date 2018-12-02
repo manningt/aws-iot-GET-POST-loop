@@ -153,20 +153,21 @@ class ShadeController(BaseThing):
         return "ESP-" + "".join("{:02x}".format(x) for x in id_binary)
 
     def time(self):
-        from get_ntp_time import get_ntp_time
+        from ntptime import time as get_ntp_time
         import utime
 
         # The shadow timestamp is from 1970-01-01 vs micropython is from 2000-01-01
         SECONDS_BETWEEN_1970_2000 = 946684800
         time_tuple = None
         if self._start_ticks is None:
-            for _ in range(5):
-                utime.sleep_ms(3000)
+            for _ in range(11):
+                utime.sleep_ms(333)
                 try:
                     self._timestamp = get_ntp_time()
                     break
                 except Exception as e:
                     print("Exception in get NTP: {}".format(str(e)))
+                utime.sleep_ms(666)
 
             if self._timestamp is None:
                 print("Error: failed to get time from NTP")
@@ -214,7 +215,11 @@ class ShadeController(BaseThing):
             # configure timer to issue reset, so the device will reboot and fetch a new shadow state
             TIME_BEFORE_RESET = 120000  # 3 minutes in milliseconds
             tim = machine.Timer(-1)
-            tim.init(period=TIME_BEFORE_RESET, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
+            # tim.init throws an OSError 261 after a soft reset; this is a work-around:
+            try:
+                tim.init(period=TIME_BEFORE_RESET, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
+            except:
+                pass
             exit(0)
 
         if webrepl is not None:
@@ -229,10 +234,6 @@ class ShadeController(BaseThing):
             self.rtc.irq(trigger=self.rtc.ALARM0, wake=machine.DEEPSLEEP)
             self.rtc.alarm(self.rtc.ALARM0, self._current_state['params']['sleep'] << 10)
             machine.deepsleep()
-        # else:
-        #     print("No deep sleep yet.. emulating")
-        #     sleep_ms(self._current_state['params']['sleep'] << 10)
-        #     machine.reset()
 
     # @property
     def _reported_state_get(self):
