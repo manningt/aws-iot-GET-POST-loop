@@ -5,16 +5,14 @@ def main(thing_type='Signal'):
         There is no return: the function calls thing.go_to_sleep() after any failure or when the function ends
         It does the following steps:
             - instances a 'thing' which has a state dictionary in the AWS-IOT shadow format
-            - gets the current time from an NTP server in 32-bit format.
-                NOTE: it will fail past 2038.  Not relying on an on-board RTC
+            - gets the current time from an NTP server in 32-bit format.  NOTE: it will fail past 2038.  Not relying on an on-board RTC
             - gets the shadow state
-            - tells the thing to process the state received from AWS;
-                this is where the device does any action specified by a state change
+            - tells the thing to process the state received from AWS - this is where the device does any action specified by a state change
             - if the reported state dictionary is not empty, POST it to AWS
-
-        The AWS access & secret key and endpoint ID are obtained via the function get_aws_info,
-        which currently reads a file.  The functions to get credentials or certificates can be overloaded to obtain
-        them from device specific secure/encrypted storage, like http://www.microchip.com/wwwproducts/en/ATECC508A
+            
+        The AWS access & secret key and endpoint ID are obtained via the function get_aws_info, which currently reads a file.
+        TODO: change get_aws_info to get the keys from encrypted storage, like: http://www.microchip.com/wwwproducts/en/ATECC508A
+        currently urequest function does not verify certificates
         """
     import gc
     import utime
@@ -28,8 +26,6 @@ def main(thing_type='Signal'):
         https://github.com/manningt/micropython-lib/tree/urequest-with-content-length/urequests
     """
     import trequests as requests
-    import logging
-    logger = logging.getLogger(__name__)
 
     while True:
         if 'thing' in locals():
@@ -45,7 +41,6 @@ def main(thing_type='Signal'):
             from post_thing_esp8266 import PostThing as Thing
         elif thing_type == 'Shade':
             from shade_controller import ShadeController as Thing
-        logger.debug("Using Thing.module: %s", Thing.__module__)
 
         start_ticks = utime.ticks_ms()
         thing = Thing()
@@ -53,7 +48,7 @@ def main(thing_type='Signal'):
         """ show_progress is an device specific feature.
             The device can blink an LED, print a statement or show a progress bar
             show_progress is called after: 
-                (1) reset/initialization, (2) connecting to an IP network,
+                (1) reset/initialization, (2) connecting to WiFi,
                 (3) getting the time and (4) getting state from AWS-IOT
         """
         if getattr(thing, "show_progress", None) != None:
@@ -90,6 +85,7 @@ def main(thing_type='Signal'):
         request_dict = awsiot_sign.request_gen(aws_iot_cfg['endpt_prefix'], thing.id, \
                                                aws_credentials['akey'], aws_credentials['skey'], date_time, region=aws_iot_cfg['region'])
         endpoint = 'https://' + request_dict["host"] + request_dict["uri"]
+
         try:
             r = requests.get(endpoint, headers=request_dict["headers"])
         except Exception as e:
@@ -100,7 +96,7 @@ def main(thing_type='Signal'):
         if (r.status_code == 200):
             shadow_state_json = r.json()
             if (('state' not in shadow_state_json) or ('desired' not in shadow_state_json['state'])):
-                logger.error("Invalid state recieved:\n %s\n", shadow_state_json)
+                print('Invalid state recieved: '.format(shadow_state_json))
                 thing.sleep(msg="{0} -- Error: Invalid shadow state recieved from AWS".format(date_time))
                 break
             else:
@@ -119,7 +115,7 @@ def main(thing_type='Signal'):
             for key, value in reported_state.items():
                 post_body['state']['reported'][key] = value
             post_body_str = ujson.dumps(post_body)
-            logger.debug("Posting: %s", post_body_str)
+            #        print("posting: " + post_body_str)
 
             # == make an updated timestamp
             time_tuple = thing.time()
@@ -131,12 +127,13 @@ def main(thing_type='Signal'):
                                                    aws_credentials['skey'], date_time, method='POST',
                                                    region=aws_iot_cfg['region'], body=post_body_str)
             gc.collect()
-            logger.debug("Free mem before POST: %d", gc.mem_free())
+            print("Free mem before POST: {0}".format(gc.mem_free()))
+
             try:
                 # not using json as data in POST to save a second encoding
                 r = requests.post(endpoint, headers=request_dict["headers"], data=post_body_str)
                 if r.status_code != 200:
-                    logger.error("On Update; reply: \n%s\n", r.json())
+                    # print("post_reply: ", end =""); print(r.json())
                     exception_msg = "{} -- Error on POST: code: {}  reason: {}".format(date_time, r.status_code,
                                                                                        r.reason)
                     r.close()
@@ -149,5 +146,5 @@ def main(thing_type='Signal'):
                 break
 
         elapsed_msecs = utime.ticks_diff(utime.ticks_ms(), start_ticks)
-        logger.info("Main took: %d msec. ---  Free mem before exit: %d", elapsed_msecs, gc.mem_free())
+        print("Main took: {0} msec. ---  Free mem before exit: {1}".format(elapsed_msecs, gc.mem_free()))
         thing.sleep()
