@@ -48,22 +48,26 @@ def main(thing_type='Signal'):
         """ show_progress is an device specific feature.
             The device can blink an LED, print a statement or show a progress bar
             show_progress is called after: 
-                (1) reset/initialization, (2) connecting to WiFi, (3) getting the time and (4) getting state from AWS-IOT
+                (1) reset/initialization, (2) connecting to WiFi,
+                (3) getting the time and (4) getting state from AWS-IOT
         """
-        if 'show_progress' in dir(thing): thing.show_progress(1, 4)  # after initialization
+        if getattr(thing, "show_progress", None) != None:
+            thing.show_progress(1, 4)  # after initialization
 
+        # connect to IP network
         connected = thing.connect()
         if not connected[0]:
             thing.sleep(msg=connected[1])
             break
-
-        if 'show_progress' in dir(thing): thing.show_progress(2, 4)  # after connected to WiFi
+        if getattr(thing, "show_progress", None) != None:
+            thing.show_progress(2, 4)  # after connected to IP
 
         time_tuple = thing.time() # different things obtain the time in different ways; needs to be GMT
         if time_tuple is None:
             thing.sleep(msg="Error: failed to get current time")
             break
-        if 'show_progress' in dir(thing): thing.show_progress(3, 4)  # after getting time from NTP
+        if getattr(thing, "show_progress", None) != None:
+            thing.show_progress(3, 4)  # after getting time from NTP
 
         datestamp = "{0}{1:02d}{2:02d}".format(time_tuple[0], time_tuple[1], time_tuple[2])
         time_now_utc = "{0:02d}{1:02d}{2:02d}".format(time_tuple[3], time_tuple[4], time_tuple[5])
@@ -97,7 +101,8 @@ def main(thing_type='Signal'):
                 break
             else:
                 thing.shadow_state = shadow_state_json
-                if 'show_progress' in dir(thing): thing.show_progress(4, 4)  # after GET shadow state
+                if getattr(thing, "show_progress", None) != None:
+                    thing.show_progress(4, 4)  # after GET shadow state
         else:
             exception_msg = "Error on GET: code: {}  reason: {}  timestamp: {}".format(r.status_code, r.reason, date_time)
             thing.sleep(msg=exception_msg)
