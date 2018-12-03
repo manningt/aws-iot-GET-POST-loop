@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 class BaseThing(object):
     """ A base class for AWS-IOT things
         This class holds state info for a device; The variables in state info control the device's behavior.
@@ -47,42 +50,42 @@ class BaseThing(object):
     # @property
     def _reported_state_get(cls):
         """
+            Adds conditions to the reported state.
+                 Note: Desired value changes are added to _reported_state in shadow_state.setter
             This method can be overridden by a child class to report additional device specific state
             super()._reported_state_get should be called by the child class to return the base_class reported state
+
+            Since getting conditions may read hardware, e.g. I2C, then call as few times as possible to save power
         """
-        #add conditions to the reported state
-        # call the condition[get] function as few times as possible, since it consumes time/power
         for condition in cls._conditions:
             if 'get' in cls._conditions[condition]:
-                # print("\nTesting condition: {}".format(condition), end='')
-                if 'reported' in cls._shadow_state['state'] and condition in cls._shadow_state['state']['reported']:
+                logger.debug("Checking condition: %s", condition)
+                # if condition already in reported state, then check threshold crossing & update interval
+                if 'state' in cls._shadow_state and 'reported' in cls._shadow_state['state']\
+                        and condition in cls._shadow_state['state']['reported']:
                     if 'threshold' in cls._conditions[condition]:
                         current_value = cls._conditions[condition]['get']()
                         delta = cls._shadow_state['state']['reported'][condition] - current_value
-                        # print("  threshold: {}  delta: {}".format(cls._conditions[condition]['threshold'], delta), end='')
                         if (abs(delta) > cls._conditions[condition]['threshold']):
                             cls._reported_state[condition] = current_value
-                            # print("\nUpdating {} due to threshold {}; delta: {}".format(condition, \
-                            #                                         cls._conditions[condition]['threshold'], delta))
+                            logger.debug("Updating %s due to threshold %d; delta: %d", condition, \
+                                      cls._conditions[condition]['threshold'], delta)
                     if not condition in cls._reported_state and \
                             'interval' in cls._conditions[condition] and \
                             'metadata' in cls._shadow_state:
-                        # print("  interval: {}".format(cls._conditions[condition]['interval']), end='')
                         if cls._timestamp is not None:
                             previous_report_timestamp = cls._shadow_state['metadata']['reported'][condition]['timestamp']
                             delta_time = cls._timestamp - previous_report_timestamp
-                            # print("\n\t\tmetadata_ts: {}  -- class_ts: {} -- delta: {}".format(previous_report_timestamp, \
-                            #                                                                    cls._timestamp, delta_time))
                             if delta_time > cls._conditions[condition]['interval']:
-                                # print("\nUpdating {} due to interval {}; delta_time: {}".format(condition, \
-                                #  cls._conditions[condition]['interval'], delta_time))
+                                logger.debug("Updating %s due to interval %s; delta_time: %s", condition, \
+                                          cls._conditions[condition]['interval'], delta_time)
                                 cls._reported_state[condition] = cls._conditions[condition]['get']()
                         else:
-                            print("WARNING: no cls._timestamp when evaluating condition interval")
+                            logger.warning("no cls._timestamp when evaluating condition interval")
                 else:
                     cls._reported_state[condition] = cls._conditions[condition]['get']()
             else:
-                print("WARNING: no get function for condition {}". format(condition))
+                logger.warning("no get function for condition {}". format(condition))
 
         return cls._reported_state
 
@@ -139,9 +142,9 @@ class BaseThing(object):
                                         'op': key, \
                                         'value': shadow_state['state']['desired'][key], \
                                         'timestamp' : desired_timestamp})
-                    #print("Performing operation: {}".format(key))
+                    logger.debug("Performing operation: %s", key)
                     cls._current_state['history'][0]['status'] = cls._operations[key]()
-                    print("Operation: {} status: {}".format(key, cls._current_state['history'][0]['status']))
+                    logger.info("Operation '%s' status: %s", key, cls._current_state['history'][0]['status'])
                     cls._current_state['history'][0]['done'] = 1
                     history_updated = True
                     # dispatch only one parameter per update
@@ -195,8 +198,8 @@ class BaseThing(object):
         """
         from utime import sleep
         if msg is not None:
-            print(msg, end='')
-        print(" ... Going to sleep for {0} seconds.".format(cls._current_state['params']['sleep']))
+            logger.warning("%s", msg)
+        logger.info(" ... Going to sleep for %s seconds.", cls._current_state['params']['sleep'])
         sleep(cls._current_state['params']['sleep'])
 
     def get_aws_iot_cfg(cls):
@@ -212,13 +215,13 @@ class BaseThing(object):
     def _restore_state(cls):
         """ This method must be overridden by a child class to write to device specific persistent storage
         """
-        print("Error: _restore_state should be overridden by the child.")
+        logger.error("_restore_state should be overridden by the child.")
         return {}
 
     def _persist_state(cls):
         """ This method must be overridden by a child class to read from device specific persistent storage
         """
-        print("Error: _persist_state should be overridden by the child.")
+        logger.error("_persist_state should be overridden by the child.")
 
     def _dispatch_test(cls):
         """ calls one of the test functions based on the string in the shadow_state 'test' variable
@@ -248,5 +251,6 @@ class BaseThing(object):
             return cfg_info
         except OSError as e:
             e_str = str(e)
-            print("Exception (get_cfg_info) filename: {}   Error: {}".format(filename, e_str))
+            logger.error("In get_cfg_info from filename: %s   Exception: %s", filename, e_str)
             return None
+
