@@ -12,7 +12,7 @@ class ShadeController(BaseThing):
             if cause < machine.PWRON_RESET or cause > machine.SOFT_RESET:
                 logger.warning("Unknown reset cause: %d", cause)
             else:
-                logger.info("Reset cause: %s", reset_names[cause])
+                logger.debug("Reset cause: %s", reset_names[cause])
 
         self.rtc = machine.RTC()
 
