@@ -6,8 +6,6 @@ args = parser.parse_args()
 import logging
 logging.basicConfig(level=getattr(logging, args.loglevel))
 #logging.basicConfig(level=logging.DEBUG)
-global LOG
-LOG = logging.getLogger("main")
 
 import aws_thing_loop
 aws_thing_loop.main()

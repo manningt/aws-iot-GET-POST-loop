@@ -45,7 +45,13 @@ def main(thing_type='Signal'):
             from post_thing_esp8266 import PostThing as Thing
         elif thing_type == 'Shade':
             from shade_controller import ShadeController as Thing
-        logger.debug("Using Thing.module: %s", Thing.__module__)
+        try:
+            logger.debug("Using Thing.module: %s", Thing.__module__)
+        except Exception as e:
+            print("Incorrect logging config: %s", e)
+            import sys
+            sys.exit(1)
+
 
         start_ticks = utime.ticks_ms()
         thing = Thing()
@@ -149,5 +155,5 @@ def main(thing_type='Signal'):
                 break
 
         elapsed_msecs = utime.ticks_diff(utime.ticks_ms(), start_ticks)
-        logger.info("Main took: %d msec. ---  Free mem before exit: %d", elapsed_msecs, gc.mem_free())
+        logger.info("Main took: %d msec. ---  Free mem before sleep: %d", elapsed_msecs, gc.mem_free())
         thing.sleep()
