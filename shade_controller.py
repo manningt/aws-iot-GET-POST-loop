@@ -1,22 +1,18 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from base_thing import BaseThing
 class ShadeController(BaseThing):
 
     def __init__(self):
         import machine
-        if "reset_cause" in dir(machine):
-            rst = machine.reset_cause()
-            print('reset-cause: ', end='')
-            if rst == machine.PWRON_RESET:  # -- 0
-                print('PWRON')
-            elif rst == machine.WDT_RESET:  # -- 1
-                print('WDT')
-            elif rst == machine.SOFT_RESET:  # -- 4
-                print('SOFT')
-            elif rst == machine.DEEPSLEEP_RESET:  # -- 5
-                print('DEEPSLEEP')
-            elif rst == machine.HARD_RESET:  # -- 6
-                print('HARD')
-                # overlap of deepsleep & soft_reset: elif rst = machine.DEEPSLEEP: # -- 4
+        if getattr(machine, "reset_cause", None) != None:
+            reset_names = ['0', 'PWRON', 'HARD', 'Watchdog', 'DEEPSLEEP', 'SOFT']
+            cause = machine.reset_cause()
+            if cause < machine.PWRON_RESET or cause > machine.SOFT_RESET:
+                logger.warning("Unknown reset cause: %d", cause)
+            else:
+                logger.debug("Reset cause: %s", reset_names[cause])
 
         self.rtc = machine.RTC()
 
@@ -55,8 +51,6 @@ class ShadeController(BaseThing):
         elif PCB_version == 3:
             self.PIN_LED = 16
             self.PIN_POWER_ENABLE = 16
-            # self.PIN_MOTOR_ENABLE1 = 5
-            # self.PIN_MOTOR_ENABLE2 = 17
             self.PIN_MOTOR1_ENABLES = (5, 17)
             self.PIN_MOTOR2_ENABLES = (18, 19)
             self.PIN_CHARGING_DISABLE = 21
@@ -66,7 +60,7 @@ class ShadeController(BaseThing):
             self.ATECC508_ADDR = 0x60  # 96 decimal
         else:
             import sys
-            print("Unknown PCB_rev".format(PCB_rev))
+            logger.error("Unknown PCB_rev: %d", PCB_rev)
             sys.exit(1)
 
         self.I2C_FREQ = 100000
@@ -118,8 +112,6 @@ class ShadeController(BaseThing):
         from utime import sleep_ms
         from setwifi import setwifi as setwifi
 
-        if "sleep_type" in dir(esp):
-            esp.sleep_type(esp.SLEEP_NONE)  # don't shut off wifi when sleeping
         wlan = network.WLAN(network.STA_IF)
         wlan.active(True)
         if platform == 'esp32':
@@ -133,14 +125,13 @@ class ShadeController(BaseThing):
                 return False, "Error: could not obtain wifi configuration"
             wlan.connect(cfg_info['SSID'], cfg_info['password'])
 
-        sleep_ms(3333)
         connected = False
-        for _ in range(20):
+        for _ in range(180):
             connected = wlan.isconnected()
             if connected:
                 return True, None
             else:
-                sleep_ms(666)
+                sleep_ms(33)
         if not connected:
             setwifi()
             return False, "Warning: unable to connect to WiFi; setWiFi run to get new credentials"
@@ -159,28 +150,35 @@ class ShadeController(BaseThing):
         # The shadow timestamp is from 1970-01-01 vs micropython is from 2000-01-01
         SECONDS_BETWEEN_1970_2000 = 946684800
         time_tuple = None
+        last_exception = None
         if self._start_ticks is None:
-            for _ in range(11):
+            for i in range(11):
                 utime.sleep_ms(333)
                 try:
                     self._timestamp = get_ntp_time()
                     break
                 except Exception as e:
-                    print("Exception in get NTP: {}".format(str(e)))
-                utime.sleep_ms(666)
+                    last_exception = str(e)
+                    logger.debug("Exception in get NTP: %s", last_exception)
+                # the 1st NTP request after a hard reset and then an IP connect always fails, so retry quickly
+                if i < 2:
+                    utime.sleep_ms(33)
+                else:
+                    utime.sleep_ms(666)
 
             if self._timestamp is None:
-                print("Error: failed to get time from NTP")
+                logger.error("Failed to get time from NTP after %d attempts; Last exception was '%s'.", i+1, last_exception)
             elif type(self._timestamp).__name__=='int':
+                logger.debug("Recieved NTP timestamp after %d attempts", i+1)
                 try:
                     time_tuple = utime.localtime(self._timestamp)
                     # adjust the stored timestamp used for reporting conditions based on an interval
                     self._start_ticks = utime.ticks_ms()
                     self._timestamp += SECONDS_BETWEEN_1970_2000
-                except:
-                    print("Error: Exception on timestamp conversion; timestamp: {}".format(self._timestamp))
+                except Exception as e:
+                    logger.error("Exception '%s' on timestamp conversion; timestamp: %d", str(e), self._timestamp)
             else:
-                print("NTP timestamp not an int: {}".format(self._timestamp))
+                logger.error("NTP timestamp not an int: %s", self._timestamp)
         else:
             # get updated time by adding elapsed time to existing timestamp
             #     - shift right 10 is approx equal to divide by 1000 in order to get seconds
@@ -199,7 +197,7 @@ class ShadeController(BaseThing):
 
         LOG_FILENAME = "./log.txt"
         if msg is not None:
-            print(msg)
+            logger.warning(msg)
             with open(LOG_FILENAME, 'a') as log_file:
                 log_file.write(msg + "\n")
 
@@ -209,7 +207,7 @@ class ShadeController(BaseThing):
         if self._current_state['params']['sleep'] < 1:
             # exit: stop the infinite loop of main & deep-sleep
             from sys import exit
-            print("Staying awake due to sleep parameter < 1.")
+            logger.info("Staying awake due to sleep parameter < 1.")
             if webrepl is not None:
                 webrepl.start()
             # configure timer to issue reset, so the device will reboot and fetch a new shadow state
@@ -218,15 +216,14 @@ class ShadeController(BaseThing):
             # tim.init throws an OSError 261 after a soft reset; this is a work-around:
             try:
                 tim.init(period=TIME_BEFORE_RESET, mode=machine.Timer.ONE_SHOT, callback=lambda t:machine.reset())
-            except:
-                pass
+            except Exception as e:
+                logger.warning("Exception '%s' on tim.init; No reset after a timer expiry.", e)
             exit(0)
 
         if webrepl is not None:
             webrepl.stop()
-            sleep_ms(1000)
-        print("Going to sleep for {0} seconds.".format(self._current_state['params']['sleep']))
 
+        logger.info("Going to sleep for %s seconds.", self._current_state['params']['sleep'])
         if platform == 'esp32':
             # multiply sleep time by approx 1000 (left shift by 10)
             machine.deepsleep(self._current_state['params']['sleep'] << 10)
@@ -295,12 +292,12 @@ class ShadeController(BaseThing):
         import ujson
         try:
             tmp = ujson.loads(self.rtc.memory())
-            print("restored state: {}".format(tmp))
+            logger.debug("restored state: %s", tmp)
             if type(tmp) is not dict or 'params' not in tmp:
-                print("Warning (restore_state): RTC memory did not have parameters")
+                logger.warning("_restore_state: RTC memory did not have parameters")
                 tmp = {}
         except:
-            print("Warning (restore_state): RTC memory was not JSON")
+            logger.warning("_restore_state: RTC memory was not JSON")
             tmp = {}
         return tmp
 
@@ -431,7 +428,7 @@ class ShadeController(BaseThing):
                 try:
                     self.current_sensor = INA219(i2c=self.i2c, i2c_addr=self.INA219_ADDR)
                     if not self.current_sensor.in_standby_when_initialized:
-                        print("Current sensor not in standby.")
+                        logger.warning("Current sensor not in standby.")
                 except:
                     status = "I2C access to current sensor failed"
         return status
@@ -482,7 +479,7 @@ class ShadeController(BaseThing):
                 if (averaging_index < 0):
                     averaging_index += self.STOPPING_CURRENT_SAMPLE_COUNT
                 self.averaging_sum += self.stopping_currents[averaging_index]
-#                print("Index: {0} -- Value: {1} -- Sum: {2}".format(averaging_index, self.stopping_currents[averaging_index], self.averaging_sum))
+                # print("Index: {0} -- Value: {1} -- Sum: {2}".format(averaging_index, self.stopping_currents[averaging_index], self.averaging_sum))
             
             # stop the motor if over the threshold
             if self.averaging_sum > self.average_current_threshold:
@@ -535,7 +532,7 @@ class ShadeController(BaseThing):
         from utime import sleep_ms
         cfg = self.i2c.readfrom(self.LM75B_ADDR, 1)
         if not (cfg[0] & 0x01):
-            print("Temperature sensor not shutdown.")
+            logger.warning("Temperature sensor not shutdown.")
             self.i2c.writeto_mem(self.LM75B_ADDR, 1, b'\x00') # write cfg register to take out of shutdown state
             sleep_ms(105) # wait for a conversion period
         value = bytearray(2)

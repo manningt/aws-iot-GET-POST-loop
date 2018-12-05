@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from base_thing import BaseThing
 class SignalThing(BaseThing):
     """ An example class showing how to add AWS-IOT parameters (desired state variables) as operators that do something.
@@ -12,6 +15,7 @@ class SignalThing(BaseThing):
         # add signal operations to the base class
         self._operations['signal'] = self._signal
         self._test_operations['child'] = self._test_child
+        # the following conditions are examples of updating by threshold or updating by interval
         self._conditions['freeMemory'] = {'get': self.get_mem_free, 'threshold' : 1024, 'interval': 6000}
         self._conditions['platform'] = {'get': self.get_platform, 'interval': 120}
 
@@ -25,6 +29,9 @@ class SignalThing(BaseThing):
             my_id = socket.gethostname()
         except: pass
         return my_id
+
+    def show_progress(self, step, total_steps):
+        logger.debug("Step: %d of %d", step, total_steps)
 
     def time(self):
         """ returns a GMT timestamp to be used when generating the AWS request """
@@ -49,7 +56,7 @@ class SignalThing(BaseThing):
             with open(cls._PERSIST_FILENAME) as f:
                 return ujson.load(f)
         except OSError:
-            print("Warning (restore_state): file '{}' does not exist".format(cls._PERSIST_FILENAME))
+            logger.warning("In _restore_state: file '%s' does not exist.", cls._PERSIST_FILENAME)
             return {}
 
     def _persist_state(cls):
@@ -64,7 +71,7 @@ class SignalThing(BaseThing):
             with open(cls._PERSIST_FILENAME, "w") as f:
                 f.write(ujson.dumps(cls._current_state))
         except OSError:
-            print("Error: persisting state failed.")
+            logger.error("Persisting state to file '%s' failed.", cls._PERSIST_FILENAME)
 
     def _signal(self):
         """ causes the device to signal (in the case of Unix, beep the terminal) for the number of times specified
