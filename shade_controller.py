@@ -232,7 +232,6 @@ class ShadeController(BaseThing):
             self.rtc.alarm(self.rtc.ALARM0, self._current_state['params']['sleep'] << 10)
             machine.deepsleep()
 
-    # @property
     def _reported_state_get(self):
         # add current arrays as strings to report
         if self.starting_currents[0] != 0:
@@ -257,11 +256,9 @@ class ShadeController(BaseThing):
     reported_state = property(_reported_state_get)
 
 
-    # @property
     def _shadow_state_get(self):
         return super()._shadow_state_get()
 
-    # @shadow_state.setter
     def _shadow_state_set(self, shadow_state):
         if self._has_history and self._restored_state['history'][0]['done'] != 1:
             # The operation didn't finished, so update the status to be reflected in an updated report

@@ -47,7 +47,10 @@ class BaseThing(object):
         cls._has_history = 'history' in cls._restored_state and len(cls._restored_state['history']) > 0
         cls._timestamp = None
 
-    # @property
+    """
+    @property and prop.setter decorators were not used because I couldn't get the call to super().prop to work
+    in the derived class.  Hence for reported & shadow state, the prop = property(get, set) mechanism was used.
+    """
     def _reported_state_get(cls):
         """
             Adds conditions to the reported state.
@@ -91,18 +94,16 @@ class BaseThing(object):
 
     reported_state = property(_reported_state_get)
 
-    # @property
     def _shadow_state_get(cls):
         """
              This method is provided for completeness, and is not used in normal operation
          """
         return cls._shadow_state
 
-    # @shadow_state.setter
     def _shadow_state_set(cls, shadow_state):
-        """ Compares shadow state received from AWS-IOT to the current state.  If a variable (current vs desired) doesn't
-            match, a function from the _operations dictionary will be called.  After the operation is complete, the
-            updated current state and command history is persisted.  The reported state is also updated.
+        """ Compares shadow state received from AWS-IOT to the current state.  If a variable (current vs desired)
+            doesn't match, a function from the _operations dictionary will be called.  After the operation is complete,
+            the updated current state and command history is persisted.  The reported state is also updated.
             This method can be overridden by a child class to perform additional state checks before calling
             super()._shadow_state_set
         """
