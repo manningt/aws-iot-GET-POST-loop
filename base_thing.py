@@ -88,7 +88,7 @@ class BaseThing(object):
                 else:
                     cls._reported_state[condition] = cls._conditions[condition]['get']()
             else:
-                logger.warning("no get function for condition {}". format(condition))
+                logger.warning("no get function for condition: %s", condition)
 
         return cls._reported_state
 
@@ -213,6 +213,16 @@ class BaseThing(object):
         """
         return cls._get_cfg_info("aws_credentials.txt")
 
+    def get_private_key(cls):
+        """ This method SHOULD be overridden by a child class to retrieve from a SECURE persistent store.
+        """
+        return cls._get_cfg_info_txt("private.key")
+
+    def get_certificate(cls):
+        """ This method SHOULD be overridden by a child class to retrieve from a SECURE persistent store.
+        """
+        return cls._get_cfg_info_txt("certificate.pem")
+
     def _restore_state(cls):
         """ This method must be overridden by a child class to write to device specific persistent storage
         """
@@ -255,3 +265,12 @@ class BaseThing(object):
             logger.error("In get_cfg_info from filename: %s   Exception: %s", filename, e_str)
             return None
 
+    def _get_cfg_info_txt(cls, filename):
+        try:
+            with open(filename) as f:
+                cfg_info = f.read()
+            return cfg_info
+        except OSError as e:
+            e_str = str(e)
+            logger.error("In get_cfg_info from filename: %s   Exception: %s", filename, e_str)
+            return None

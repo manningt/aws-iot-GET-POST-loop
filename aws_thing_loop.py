@@ -19,15 +19,15 @@ def main(thing_type='Signal', protocol='HTTPS'):
     import gc
     import utime
     import ujson
-    import awsiot_sign
-    """ trequests is a modified version of urequests which provides a work-around for AWS not closing the 
-        socket after a request.  It uses the content-length from the headers when reading the data from the socket.
-        Without the modification, the request to AWS hangs since the socket doesn't close.
-        I renamed the module trequests instead of urequests in order to avoid stomping on the micropython-lib
-        The code can be fetched from: 
-        https://github.com/manningt/micropython-lib/tree/urequest-with-content-length/urequests
-    """
-    import trequests as requests
+    # import awsiot_sign
+    # """ trequests is a modified version of urequests which provides a work-around for AWS not closing the
+    #     socket after a request.  It uses the content-length from the headers when reading the data from the socket.
+    #     Without the modification, the request to AWS hangs since the socket doesn't close.
+    #     I renamed the module trequests instead of urequests in order to avoid stomping on the micropython-lib
+    #     The code can be fetched from:
+    #     https://github.com/manningt/micropython-lib/tree/urequest-with-content-length/urequests
+    # """
+    # import trequests as requests
     import logging
     logger = logging.getLogger(__name__)
 
@@ -80,9 +80,10 @@ def main(thing_type='Signal', protocol='HTTPS'):
         if getattr(thing, "show_progress", None) != None:
             thing.show_progress(3, 4)  # after getting time from NTP
 
-
         if protocol == 'HTTPS':
             from shadow_accessor_http_sigv4 import ShadowAccessor
+        elif protocol == 'MQTT':
+            from shadow_accessor_mqtt_cert import ShadowAccessor
         else:
             msg = format("Error: Unsupported protocol: {}", protocol)
             thing.sleep(msg)
@@ -115,6 +116,7 @@ def main(thing_type='Signal', protocol='HTTPS'):
                 thing.sleep(status_msg)
                 break
 
+        shadow_accessor.disconnect()
         elapsed_msecs = utime.ticks_diff(utime.ticks_ms(), start_ticks)
         logger.info("Main took: %d msec. ---  Free mem before sleep: %d", elapsed_msecs, gc.mem_free())
         thing.sleep()

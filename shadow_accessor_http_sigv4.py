@@ -41,7 +41,7 @@ class ShadowAccessor:
         if not self._aws_iot_cfg:
             return "Error: unable to obtain AWS IOT access parameters"
         self._aws_credentials = thing.get_aws_credentials()
-        if not self._aws_iot_cfg:
+        if not self._aws_credentials:
             return "Error: unable to obtain AWS credentials"
         return None
 
@@ -115,3 +115,6 @@ class ShadowAccessor:
         datestamp = "{0}{1:02d}{2:02d}".format(time_tuple[0], time_tuple[1], time_tuple[2])
         time_now_utc = "{0:02d}{1:02d}{2:02d}".format(time_tuple[3], time_tuple[4], time_tuple[5])
         return (datestamp + "T" + time_now_utc + "Z")
+
+    def disconnect(self):
+        return

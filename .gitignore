@@ -1,3 +1,5 @@
 .idea/*
 *.txt
+*.pem
+*.key
 __pycache__/*
