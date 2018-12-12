@@ -7,7 +7,7 @@ from umqtt.simple import MQTTClient, MQTTException
 logger = logging.getLogger(__name__)
 
 
-class ShadowAccessor:
+class ThingAccessor:
     """ this module provides functions to do:
          - open and close and MQTT connection
          - publish a MQTT GET to aws-iot to obtain a shadow.
@@ -64,18 +64,18 @@ class ShadowAccessor:
             exception_msg = "Exception on MQTT connect: {}".format(e)
             return exception_msg
 
-        self._base_topic = "$aws/things/" + self._thing_id + "/shadow"
-        self.subscribe("/get/accepted")
-        self.subscribe("/update/accepted")
+        self._base_topic = "$aws/things/" + self._thing_id
+        self.subscribe("/shadow/get/accepted")
+        self.subscribe("/shadow/update/accepted")
         return None
 
-    def subscribe(self, shadow_topic):
-        logger.debug("subscribe to: %s", self._base_topic + shadow_topic)
-        self._client.subscribe(self._base_topic + shadow_topic)
+    def subscribe(self, thing_topic):
+        logger.debug("subscribe to: %s", self._base_topic + thing_topic)
+        self._client.subscribe(self._base_topic + thing_topic)
 
-    def publish(self, shadow_topic, msg=""):
-        logger.debug("publish topic: %s -- msg: '%s'", self._base_topic + shadow_topic, msg)
-        self._client.publish(self._base_topic + shadow_topic, msg)
+    def publish(self, thing_topic, msg=""):
+        logger.debug("publish topic: %s -- msg: '%s'", self._base_topic + thing_topic, msg)
+        self._client.publish(self._base_topic + thing_topic, msg)
 
     def get(self):
         """
@@ -85,7 +85,7 @@ class ShadowAccessor:
         """
         exception_msg = None
         shadow_state_json = None
-        self.publish("/get")
+        self.publish("/shadow/get")
 
         for i in range(18):
             sleep_ms(333)
@@ -111,7 +111,7 @@ class ShadowAccessor:
         exception_msg = None
         if state == None:
             return "Call to update error: state is None"
-        self.publish("/update", msg=state)
+        self.publish("/shadow/update", msg=state)
 
         for i in range(18):
             sleep_ms(333)

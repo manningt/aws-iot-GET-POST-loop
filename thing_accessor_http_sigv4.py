@@ -16,7 +16,7 @@ import trequests as requests
 """
 
 
-class ShadowAccessor:
+class ThingAccessor:
     """ this module provides functions to do:
          - an https GET request to aws-iot to obtain a shadow.
          - an https POST request to aws-iot to update a shadow.
