@@ -6,7 +6,7 @@ There are 4 primary modules:
   * base_thing: provides the functions every thing should have: set the shadow_state, get the reported state, get ID, get the current time
   * a thing: inherits from base_thing and adds device specific capabilitie.  There are 3 examples:
     * signal_thing_unix: when the integer value of the 'signal' variable in desired state is changed, the terminal where the script is running will beep
-    * signal_thing_esp: similar to signal_thing_unix, an ESP8266 will flash its LED.  On the 8266, it requires pin 16 to be connected to the reset pin for deep sleep to work
+    * signal_thing_esp: similar to signal_thing_unix, an ESP8266 will flash its LED.  On the 8266, it requires pin 16 to be connected to the reset pin for deep sleep to work.  NOTE: this module is no longer being tested; using only the ESP32 for testing.
     * shade_controller: runs on an ESP; controls a motor to position a shade
   * main.py: calls aws_thing_loop.main()  In the micropython environment, main.py is run after booting.
   
@@ -14,7 +14,7 @@ The use case is an IoT application where the device sleeps most of the time (to 
 
 A more detailed description of how to setup and run the software is at: [hackster.io](https://www.hackster.io/user3282664/micropython-to-aws-iot-cc1c20)
 
-aws_thing_loop requires:
+If using HTTP (instead of MQTT) aws_thing_loop requires:
 * [aws-signature-iot-python](https://github.com/manningt/aws-signature-iot-python)
 * [urequests](https://github.com/manningt/micropython-lib/tree/urequest-with-content-length/urequests) (modified): reads the content-length from the header and uses the length when issuing the read for the body.  The modification handles the situation where AWS does not close the socket after the GET (not compliant with HTTP1.0)
 * [hmac_ltd](https://github.com/manningt/aws-signature-iot-python/hmac_ltd.py): a modified version of hmac which allows binary keys
