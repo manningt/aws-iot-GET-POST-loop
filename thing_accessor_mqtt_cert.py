@@ -2,7 +2,8 @@ import logging
 import gc
 import ujson
 from utime import sleep_ms
-from umqtt.simple import MQTTClient, MQTTException
+#from umqtt.simple import MQTTClient, MQTTException
+from umqtt_simple import MQTTClient, MQTTException
 
 logger = logging.getLogger(__name__)
 
